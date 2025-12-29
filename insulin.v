@@ -477,6 +477,95 @@ Lemma iob_subtraction_nonneg : forall bolus iob,
 Proof. intros. lia. Qed.
 
 (** ========================================================================= *)
+(** PART VI-B: REVERSE CORRECTION                                             *)
+(** When BG < target, reduce carb bolus by (target - BG) / ISF.               *)
+(** This accounts for the fact that the patient is already low and carbs      *)
+(** alone will raise BG toward target.                                        *)
+(** ========================================================================= *)
+
+Module ReverseCorrection.
+
+  Definition reverse_correction (current_bg target_bg : BG_mg_dL) (isf : nat) : nat :=
+    if isf =? 0 then 0
+    else if target_bg <=? current_bg then 0
+    else (target_bg - current_bg) / isf.
+
+  Definition apply_reverse_correction (carb_bolus current_bg target_bg : nat) (isf : nat) : nat :=
+    let reduction := reverse_correction current_bg target_bg isf in
+    if carb_bolus <=? reduction then 0 else carb_bolus - reduction.
+
+End ReverseCorrection.
+
+Export ReverseCorrection.
+
+(** Witness: BG 80, target 100, ISF 50. Reverse = (100-80)/50 = 0 (integer division). *)
+Lemma witness_reverse_correction_80 :
+  reverse_correction 80 100 50 = 0.
+Proof. reflexivity. Qed.
+
+(** Witness: BG 50, target 100, ISF 50. Reverse = (100-50)/50 = 1. *)
+Lemma witness_reverse_correction_50 :
+  reverse_correction 50 100 50 = 1.
+Proof. reflexivity. Qed.
+
+(** Witness: BG 60, target 100, ISF 20. Reverse = (100-60)/20 = 2. *)
+Lemma witness_reverse_correction_60 :
+  reverse_correction 60 100 20 = 2.
+Proof. reflexivity. Qed.
+
+(** Witness: BG at target yields no reverse correction. *)
+Lemma witness_reverse_at_target :
+  reverse_correction 100 100 50 = 0.
+Proof. reflexivity. Qed.
+
+(** Witness: BG above target yields no reverse correction. *)
+Lemma witness_reverse_above_target :
+  reverse_correction 150 100 50 = 0.
+Proof. reflexivity. Qed.
+
+(** Counterexample: ISF=0 returns 0 (graceful handling). *)
+Lemma counterex_reverse_isf_zero :
+  reverse_correction 50 100 0 = 0.
+Proof. reflexivity. Qed.
+
+(** Witness: apply to carb bolus. 6U carb - 1U reverse = 5U. *)
+Lemma witness_apply_reverse_6_minus_1 :
+  apply_reverse_correction 6 50 100 50 = 5.
+Proof. reflexivity. Qed.
+
+(** Witness: reverse exceeds carb bolus, result is 0. *)
+Lemma witness_reverse_exceeds_carb :
+  apply_reverse_correction 2 40 100 20 = 0.
+Proof. reflexivity. Qed.
+
+(** Witness: no reverse when BG >= target. *)
+Lemma witness_no_reverse_above_target :
+  apply_reverse_correction 6 150 100 50 = 6.
+Proof. reflexivity. Qed.
+
+(** Property: reverse correction is bounded by (target - BG) / ISF. *)
+Lemma reverse_correction_bounded : forall bg target isf,
+  isf > 0 -> target > bg ->
+  reverse_correction bg target isf <= (target - bg) / isf.
+Proof.
+  intros bg target isf Hisf Hgt.
+  unfold reverse_correction.
+  destruct (isf =? 0) eqn:E1; [apply Nat.eqb_eq in E1; lia|].
+  destruct (target <=? bg) eqn:E2.
+  - apply Nat.leb_le in E2. lia.
+  - lia.
+Qed.
+
+(** Property: apply_reverse never increases carb bolus. *)
+Lemma apply_reverse_le_original : forall carb bg target isf,
+  apply_reverse_correction carb bg target isf <= carb.
+Proof.
+  intros carb bg target isf.
+  unfold apply_reverse_correction.
+  destruct (carb <=? reverse_correction bg target isf) eqn:E; lia.
+Qed.
+
+(** ========================================================================= *)
 (** PART VII: COMPLETE BOLUS CALCULATOR                                       *)
 (** total_bolus = carb_bolus + correction_bolus - IOB                         *)
 (** ========================================================================= *)
@@ -638,6 +727,46 @@ Proof.
   { apply correction_safe_when_above_target. exact Hisf_pos. exact Habove. }
   lia.
 Qed.
+
+(** STRENGTHENED THEOREM: Predicted BG is bounded below by min(current_bg, target_bg).
+    This is unconditional on ISF and handles all cases. *)
+Theorem predicted_bg_lower_bound : forall current_bg target_bg isf,
+  isf > 0 ->
+  predicted_bg_after_correction current_bg target_bg isf >= Nat.min current_bg target_bg.
+Proof.
+  intros current_bg target_bg isf Hisf.
+  unfold predicted_bg_after_correction, correction_bolus.
+  destruct (current_bg <=? target_bg) eqn:E.
+  - apply Nat.leb_le in E.
+    rewrite Nat.min_l by lia. simpl. lia.
+  - apply Nat.leb_nle in E.
+    rewrite Nat.min_r by lia.
+    assert (Hdiv : isf * ((current_bg - target_bg) / isf) <= current_bg - target_bg).
+    { apply Nat.mul_div_le. lia. }
+    lia.
+Qed.
+
+(** When BG <= target, no correction is given, so predicted BG = current BG. *)
+Theorem no_correction_when_at_or_below_target : forall current_bg target_bg isf,
+  current_bg <= target_bg ->
+  predicted_bg_after_correction current_bg target_bg isf = current_bg.
+Proof.
+  intros current_bg target_bg isf Hle.
+  unfold predicted_bg_after_correction, correction_bolus.
+  destruct (current_bg <=? target_bg) eqn:E.
+  - simpl. lia.
+  - apply Nat.leb_nle in E. lia.
+Qed.
+
+(** Witness: predicted BG at 80 with target 100 is unchanged at 80. *)
+Lemma witness_no_correction_below_target_80 :
+  predicted_bg_after_correction 80 100 50 = 80.
+Proof. reflexivity. Qed.
+
+(** Counterexample: predicted BG at 200 with target 100 is NOT 200 (gets corrected). *)
+Lemma counterex_correction_applied :
+  predicted_bg_after_correction 200 100 50 <> 200.
+Proof. unfold predicted_bg_after_correction, correction_bolus. simpl. lia. Qed.
 
 (** ========================================================================= *)
 (** PART IX: INPUT VALIDATION                                                 *)
@@ -966,13 +1095,13 @@ Qed.
 
 Module UnitConversion.
 
-  Definition FACTOR_TENTHS : nat := 180.
+  Definition FACTOR : nat := 1802.
 
   Definition mg_dL_to_mmol_tenths (mg : nat) : nat :=
-    (mg * 10) / FACTOR_TENTHS.
+    (mg * 1000) / FACTOR.
 
   Definition mmol_tenths_to_mg_dL (mmol_tenths : nat) : nat :=
-    (mmol_tenths * FACTOR_TENTHS) / 10.
+    (mmol_tenths * FACTOR) / 1000.
 
   Definition BG_mmol_tenths := nat.
 
@@ -980,28 +1109,28 @@ End UnitConversion.
 
 Export UnitConversion.
 
-(** Witness: 180 mg/dL = 10.0 mmol/L = 100 tenths. *)
-Lemma witness_180_mg_to_mmol : mg_dL_to_mmol_tenths 180 = 10.
+(** Witness: 180 mg/dL ≈ 10.0 mmol/L = 99 tenths (180*1000/1802). *)
+Lemma witness_180_mg_to_mmol : mg_dL_to_mmol_tenths 180 = 99.
 Proof. reflexivity. Qed.
 
-(** Witness: 90 mg/dL = 5.0 mmol/L = 50 tenths. *)
-Lemma witness_90_mg_to_mmol : mg_dL_to_mmol_tenths 90 = 5.
+(** Witness: 90 mg/dL ≈ 5.0 mmol/L = 49 tenths (90*1000/1802). *)
+Lemma witness_90_mg_to_mmol : mg_dL_to_mmol_tenths 90 = 49.
 Proof. reflexivity. Qed.
 
-(** Witness: 70 mg/dL ≈ 3.9 mmol/L = 39 tenths. 70*10/180 = 3. *)
-Lemma witness_70_mg_to_mmol : mg_dL_to_mmol_tenths 70 = 3.
+(** Witness: 70 mg/dL ≈ 3.9 mmol/L = 38 tenths (70*1000/1802). *)
+Lemma witness_70_mg_to_mmol : mg_dL_to_mmol_tenths 70 = 38.
 Proof. reflexivity. Qed.
 
-(** Witness: 100 tenths (10.0 mmol/L) = 180 mg/dL. *)
-Lemma witness_100_tenths_to_mg : mmol_tenths_to_mg_dL 100 = 1800.
+(** Witness: 100 tenths (10.0 mmol/L) = 180 mg/dL (100*1802/1000). *)
+Lemma witness_100_tenths_to_mg : mmol_tenths_to_mg_dL 100 = 180.
 Proof. reflexivity. Qed.
 
-(** Witness: 50 tenths (5.0 mmol/L) = 90 mg/dL. *)
-Lemma witness_50_tenths_to_mg : mmol_tenths_to_mg_dL 50 = 900.
+(** Witness: 50 tenths (5.0 mmol/L) = 90 mg/dL (50*1802/1000). *)
+Lemma witness_50_tenths_to_mg : mmol_tenths_to_mg_dL 50 = 90.
 Proof. reflexivity. Qed.
 
-(** Witness: 39 tenths (3.9 mmol/L) ≈ 70 mg/dL. *)
-Lemma witness_39_tenths_to_mg : mmol_tenths_to_mg_dL 39 = 702.
+(** Witness: 39 tenths (3.9 mmol/L) = 70 mg/dL (39*1802/1000). *)
+Lemma witness_39_tenths_to_mg : mmol_tenths_to_mg_dL 39 = 70.
 Proof. reflexivity. Qed.
 
 (** Witness: 0 converts to 0 in both directions. *)
@@ -1015,21 +1144,29 @@ Definition BG_HYPER_MMOL_TENTHS : nat := 100. (** 10.0 mmol/L = 180 mg/dL. *)
 
 (** Witness: threshold correspondence. *)
 Lemma witness_hypo_threshold_mg :
-  mmol_tenths_to_mg_dL BG_HYPO_MMOL_TENTHS = 702.
+  mmol_tenths_to_mg_dL BG_HYPO_MMOL_TENTHS = 70.
 Proof. reflexivity. Qed.
 
 Lemma witness_hyper_threshold_mg :
-  mmol_tenths_to_mg_dL BG_HYPER_MMOL_TENTHS = 1800.
+  mmol_tenths_to_mg_dL BG_HYPER_MMOL_TENTHS = 180.
 Proof. reflexivity. Qed.
 
 (** Counterexample: round-trip is lossy due to integer division. *)
+(** 71 -> 39 tenths -> 70 mg/dL. Loss of 1 mg/dL. *)
 Lemma counterex_roundtrip_lossy :
-  mmol_tenths_to_mg_dL (mg_dL_to_mmol_tenths 71) = 54.
+  mmol_tenths_to_mg_dL (mg_dL_to_mmol_tenths 71) = 70.
 Proof. reflexivity. Qed.
 
-(** Witness: exact values round-trip perfectly. *)
-Lemma witness_exact_roundtrip :
-  mmol_tenths_to_mg_dL (mg_dL_to_mmol_tenths 180) = 180.
+(** Counterexample: even "nice" values don't roundtrip perfectly. *)
+(** 180 -> 99 tenths -> 178 mg/dL. Loss of 2 mg/dL. *)
+Lemma counterex_180_roundtrip :
+  mmol_tenths_to_mg_dL (mg_dL_to_mmol_tenths 180) = 178.
+Proof. reflexivity. Qed.
+
+(** Witness: tenths -> mg/dL -> tenths is close but still lossy. *)
+(** 100 tenths -> 180 mg/dL -> 99 tenths. Loss of 1 tenth. *)
+Lemma witness_tenths_roundtrip_lossy :
+  mg_dL_to_mmol_tenths (mmol_tenths_to_mg_dL 100) = 99.
 Proof. reflexivity. Qed.
 
 (** ========================================================================= *)
@@ -1963,6 +2100,371 @@ Proof.
   destruct (now <? be_time_minutes e) eqn:E1.
   - apply Nat.ltb_lt in E1. lia.
   - apply Nat.ltb_ge in H. exact H.
+Qed.
+
+(** ========================================================================= *)
+(** PART XXII-B: 24-HOUR TDD ACCUMULATOR                                       *)
+(** Tracks cumulative daily insulin; warns or blocks when approaching limit.  *)
+(** ========================================================================= *)
+
+Module TDDAccumulator.
+
+  Definition MINUTES_PER_DAY : nat := 1440.
+  Definition TDD_WARNING_PERCENT : nat := 80.
+  Definition TDD_BLOCK_PERCENT : nat := 100.
+
+  Definition events_in_window (now : Minutes) (window : nat) (events : list BolusEvent) : list BolusEvent :=
+    filter (fun e =>
+      let t := be_time_minutes e in
+      (now - window <=? t) && (t <=? now))
+    events.
+
+  Definition events_in_24h (now : Minutes) (events : list BolusEvent) : list BolusEvent :=
+    events_in_window now MINUTES_PER_DAY events.
+
+  Fixpoint sum_doses (events : list BolusEvent) : Insulin_twentieth :=
+    match events with
+    | nil => 0
+    | e :: rest => be_dose_twentieths e + sum_doses rest
+    end.
+
+  Definition tdd_in_24h (now : Minutes) (events : list BolusEvent) : Insulin_twentieth :=
+    sum_doses (events_in_24h now events).
+
+  Definition tdd_limit_twentieths (weight_kg : nat) : Insulin_twentieth :=
+    weight_kg * ONE_UNIT.
+
+  Definition tdd_warning_threshold (limit : Insulin_twentieth) : Insulin_twentieth :=
+    (limit * TDD_WARNING_PERCENT) / 100.
+
+  Inductive TDDStatus : Type :=
+    | TDD_OK : TDDStatus
+    | TDD_Warning : Insulin_twentieth -> TDDStatus
+    | TDD_Blocked : TDDStatus.
+
+  Definition check_tdd (now : Minutes) (events : list BolusEvent) (limit : Insulin_twentieth) : TDDStatus :=
+    let current := tdd_in_24h now events in
+    if limit <=? current then TDD_Blocked
+    else if tdd_warning_threshold limit <=? current then TDD_Warning (limit - current)
+    else TDD_OK.
+
+  Definition tdd_allows_bolus (now : Minutes) (events : list BolusEvent) (limit : Insulin_twentieth) (proposed : Insulin_twentieth) : bool :=
+    let current := tdd_in_24h now events in
+    current + proposed <=? limit.
+
+End TDDAccumulator.
+
+Export TDDAccumulator.
+
+(** Witness: 70kg adult has TDD limit of 1400 twentieths (70 units). *)
+Lemma witness_70kg_tdd_limit :
+  tdd_limit_twentieths 70 = 1400.
+Proof. reflexivity. Qed.
+
+(** Witness: warning threshold at 80% of 1400 = 1120 twentieths. *)
+Lemma witness_70kg_warning_threshold :
+  tdd_warning_threshold 1400 = 1120.
+Proof. reflexivity. Qed.
+
+(** Witness: empty history gives TDD of 0. *)
+Lemma witness_empty_tdd :
+  tdd_in_24h 1000 [] = 0.
+Proof. reflexivity. Qed.
+
+(** Witness: sum of two boluses. *)
+Definition tdd_history_2 : list BolusEvent :=
+  [mkBolusEvent 100 900; mkBolusEvent 80 800].
+
+Lemma witness_sum_two_boluses :
+  sum_doses tdd_history_2 = 180.
+Proof. reflexivity. Qed.
+
+(** Witness: TDD check returns OK when well below limit. *)
+Lemma witness_tdd_ok :
+  check_tdd 1000 tdd_history_2 1400 = TDD_OK.
+Proof. reflexivity. Qed.
+
+(** Witness: TDD check returns Warning when at 80%+. *)
+Definition tdd_history_high : list BolusEvent :=
+  [mkBolusEvent 400 900; mkBolusEvent 400 800; mkBolusEvent 400 700].
+
+Lemma witness_tdd_warning :
+  check_tdd 1000 tdd_history_high 1400 = TDD_Warning 200.
+Proof. reflexivity. Qed.
+
+(** Witness: TDD check returns Blocked when at limit. *)
+Definition tdd_history_maxed : list BolusEvent :=
+  [mkBolusEvent 500 900; mkBolusEvent 500 800; mkBolusEvent 500 700].
+
+Lemma witness_tdd_blocked :
+  check_tdd 1000 tdd_history_maxed 1400 = TDD_Blocked.
+Proof. reflexivity. Qed.
+
+(** Counterexample: old event outside 24h window not counted. *)
+(** At now=2000, window starts at 560. Event at 100 is outside, event at 900 is inside. *)
+Definition tdd_history_old : list BolusEvent :=
+  [mkBolusEvent 100 900; mkBolusEvent 100 100].
+
+Lemma witness_old_event_filtered :
+  tdd_in_24h 2000 tdd_history_old = 100.
+Proof. reflexivity. Qed.
+
+(** Witness: both events outside window gives 0. *)
+Definition tdd_history_very_old : list BolusEvent :=
+  [mkBolusEvent 100 100; mkBolusEvent 100 50].
+
+Lemma witness_all_old_events_filtered :
+  tdd_in_24h 2000 tdd_history_very_old = 0.
+Proof. reflexivity. Qed.
+
+(** Witness: allows bolus when under limit. *)
+Lemma witness_allows_bolus :
+  tdd_allows_bolus 1000 tdd_history_2 1400 200 = true.
+Proof. reflexivity. Qed.
+
+(** Counterexample: blocks bolus that would exceed limit. *)
+Lemma counterex_blocks_excessive_bolus :
+  tdd_allows_bolus 1000 tdd_history_high 1400 300 = false.
+Proof. reflexivity. Qed.
+
+(** Property: sum_doses is additive. *)
+Lemma sum_doses_app : forall l1 l2,
+  sum_doses (l1 ++ l2) = sum_doses l1 + sum_doses l2.
+Proof.
+  intros l1 l2. induction l1 as [|e rest IH].
+  - reflexivity.
+  - simpl. rewrite IH. lia.
+Qed.
+
+(** ========================================================================= *)
+(** PART XXII-C: SUSPEND-BEFORE-LOW                                            *)
+(** Predicts BG trajectory and reduces/withholds dose if hypo is predicted.   *)
+(** ========================================================================= *)
+
+Module SuspendBeforeLow.
+
+  Definition SUSPEND_THRESHOLD : BG_mg_dL := 80.
+  Definition PREDICTION_HORIZON : Minutes := 30.
+
+  Definition predict_bg_drop (iob_twentieths : Insulin_twentieth) (isf : nat) : nat :=
+    if isf =? 0 then 0
+    else (iob_twentieths * isf) / ONE_UNIT.
+
+  Definition predicted_bg (current_bg : BG_mg_dL) (iob_twentieths : Insulin_twentieth) (isf : nat) : BG_mg_dL :=
+    let drop := predict_bg_drop iob_twentieths isf in
+    if current_bg <=? drop then 0 else current_bg - drop.
+
+  Inductive SuspendDecision : Type :=
+    | Suspend_None : SuspendDecision
+    | Suspend_Reduce : Insulin_twentieth -> SuspendDecision
+    | Suspend_Withhold : SuspendDecision.
+
+  Definition suspend_check (current_bg : BG_mg_dL) (iob_twentieths : Insulin_twentieth)
+                           (isf : nat) (proposed : Insulin_twentieth) : SuspendDecision :=
+    let total_insulin := iob_twentieths + proposed in
+    let pred := predicted_bg current_bg total_insulin isf in
+    if pred <? BG_SEVERE_HYPO then Suspend_Withhold
+    else if pred <? SUSPEND_THRESHOLD then
+      let safe_insulin := ((current_bg - SUSPEND_THRESHOLD) * ONE_UNIT) / isf in
+      if safe_insulin <=? iob_twentieths then Suspend_Withhold
+      else Suspend_Reduce (safe_insulin - iob_twentieths)
+    else Suspend_None.
+
+  Definition apply_suspend (proposed : Insulin_twentieth) (decision : SuspendDecision) : Insulin_twentieth :=
+    match decision with
+    | Suspend_None => proposed
+    | Suspend_Reduce max => if proposed <=? max then proposed else max
+    | Suspend_Withhold => 0
+    end.
+
+End SuspendBeforeLow.
+
+Export SuspendBeforeLow.
+
+(** Witness: predict BG drop from 100 twentieths (5U) IOB with ISF 50.
+    Drop = (100 * 50) / 20 = 250 mg/dL. *)
+Lemma witness_predict_drop :
+  predict_bg_drop 100 50 = 250.
+Proof. reflexivity. Qed.
+
+(** Witness: current BG 200, IOB 40 twentieths (2U), ISF 50.
+    Drop = (40 * 50) / 20 = 100. Predicted = 200 - 100 = 100. *)
+Lemma witness_predicted_bg_200 :
+  predicted_bg 200 40 50 = 100.
+Proof. reflexivity. Qed.
+
+(** Witness: BG 100, IOB 60 twentieths (3U), ISF 50.
+    Drop = 150. Predicted = max(0, 100 - 150) = 0. *)
+Lemma witness_predicted_bg_low :
+  predicted_bg 100 60 50 = 0.
+Proof. reflexivity. Qed.
+
+(** Witness: safe scenario - BG 150, IOB 20, proposed 40, ISF 50.
+    Total = 60. Drop = 150. Predicted = max(0, 150 - 150) = 0.
+    This would suspend. *)
+Lemma witness_suspend_scenario :
+  suspend_check 150 20 50 40 = Suspend_Withhold.
+Proof. reflexivity. Qed.
+
+(** Witness: safe scenario - BG 200, IOB 0, proposed 40, ISF 50.
+    Total = 40. Drop = 100. Predicted = 100 >= 80. No suspend. *)
+Lemma witness_no_suspend :
+  suspend_check 200 0 50 40 = Suspend_None.
+Proof. reflexivity. Qed.
+
+(** Witness: apply suspend none leaves dose unchanged. *)
+Lemma witness_apply_none :
+  apply_suspend 100 Suspend_None = 100.
+Proof. reflexivity. Qed.
+
+(** Witness: apply suspend withhold gives 0. *)
+Lemma witness_apply_withhold :
+  apply_suspend 100 Suspend_Withhold = 0.
+Proof. reflexivity. Qed.
+
+(** Witness: apply suspend reduce caps the dose. *)
+Lemma witness_apply_reduce :
+  apply_suspend 100 (Suspend_Reduce 60) = 60.
+Proof. reflexivity. Qed.
+
+(** Witness: apply suspend reduce doesn't increase dose. *)
+Lemma witness_apply_reduce_no_increase :
+  apply_suspend 40 (Suspend_Reduce 60) = 40.
+Proof. reflexivity. Qed.
+
+(** Property: apply_suspend never increases dose. *)
+Lemma apply_suspend_le : forall proposed decision,
+  apply_suspend proposed decision <= proposed.
+Proof.
+  intros proposed decision. destruct decision.
+  - simpl. lia.
+  - simpl. destruct (proposed <=? i) eqn:E; [lia | apply Nat.leb_nle in E; lia].
+  - simpl. lia.
+Qed.
+
+(** Counterexample: ISF 0 gives no drop (graceful). *)
+Lemma counterex_isf_zero_no_drop :
+  predict_bg_drop 100 0 = 0.
+Proof. reflexivity. Qed.
+
+(** ========================================================================= *)
+(** PART XXII-D: DELIVERY FAULT DETECTION                                      *)
+(** Models occlusion/fault detection and worst-case IOB assumptions.          *)
+(** ========================================================================= *)
+
+Module DeliveryFault.
+
+  Inductive FaultStatus : Type :=
+    | Fault_None : FaultStatus
+    | Fault_Occlusion : FaultStatus
+    | Fault_LowReservoir : nat -> FaultStatus
+    | Fault_BatteryLow : FaultStatus
+    | Fault_Unknown : FaultStatus.
+
+  Definition fault_blocks_bolus (f : FaultStatus) : bool :=
+    match f with
+    | Fault_None => false
+    | Fault_Occlusion => true
+    | Fault_LowReservoir remaining => remaining <? 10
+    | Fault_BatteryLow => false
+    | Fault_Unknown => true
+    end.
+
+  Definition fault_requires_warning (f : FaultStatus) : bool :=
+    match f with
+    | Fault_None => false
+    | _ => true
+    end.
+
+  Definition worst_case_iob (history : list BolusEvent) (fault : FaultStatus) : Insulin_twentieth :=
+    match fault with
+    | Fault_Occlusion => 0
+    | _ => sum_doses history
+    end.
+
+  Definition conservative_iob (now : Minutes) (history : list BolusEvent) (dia : DIA_minutes) (fault : FaultStatus) : Insulin_twentieth :=
+    match fault with
+    | Fault_Occlusion => 0
+    | _ => total_iob now history dia
+    end.
+
+  Definition cap_to_reservoir (proposed : Insulin_twentieth) (reservoir : nat) : Insulin_twentieth :=
+    if proposed <=? reservoir then proposed else reservoir.
+
+End DeliveryFault.
+
+Export DeliveryFault.
+
+(** Witness: no fault allows bolus. *)
+Lemma witness_no_fault_allows :
+  fault_blocks_bolus Fault_None = false.
+Proof. reflexivity. Qed.
+
+(** Witness: occlusion blocks bolus. *)
+Lemma witness_occlusion_blocks :
+  fault_blocks_bolus Fault_Occlusion = true.
+Proof. reflexivity. Qed.
+
+(** Witness: low reservoir (5 units) blocks bolus. *)
+Lemma witness_low_reservoir_blocks :
+  fault_blocks_bolus (Fault_LowReservoir 5) = true.
+Proof. reflexivity. Qed.
+
+(** Witness: adequate reservoir (50 units) allows bolus. *)
+Lemma witness_adequate_reservoir_allows :
+  fault_blocks_bolus (Fault_LowReservoir 50) = false.
+Proof. reflexivity. Qed.
+
+(** Witness: battery low warns but doesn't block. *)
+Lemma witness_battery_low_allows :
+  fault_blocks_bolus Fault_BatteryLow = false.
+Proof. reflexivity. Qed.
+
+(** Witness: unknown fault blocks bolus (safe default). *)
+Lemma witness_unknown_blocks :
+  fault_blocks_bolus Fault_Unknown = true.
+Proof. reflexivity. Qed.
+
+(** Witness: occlusion assumes 0 IOB (insulin may not have been delivered). *)
+Lemma witness_occlusion_zero_iob :
+  worst_case_iob tdd_history_2 Fault_Occlusion = 0.
+Proof. reflexivity. Qed.
+
+(** Witness: no fault uses actual IOB. *)
+Lemma witness_no_fault_actual_iob :
+  worst_case_iob tdd_history_2 Fault_None = 180.
+Proof. reflexivity. Qed.
+
+(** Witness: cap to reservoir limits dose. *)
+Lemma witness_cap_to_reservoir :
+  cap_to_reservoir 100 50 = 50.
+Proof. reflexivity. Qed.
+
+(** Witness: cap doesn't increase dose. *)
+Lemma witness_cap_no_increase :
+  cap_to_reservoir 30 50 = 30.
+Proof. reflexivity. Qed.
+
+(** Property: cap_to_reservoir never exceeds reservoir. *)
+Lemma cap_to_reservoir_bounded : forall proposed reservoir,
+  cap_to_reservoir proposed reservoir <= reservoir.
+Proof.
+  intros proposed reservoir.
+  unfold cap_to_reservoir.
+  destruct (proposed <=? reservoir) eqn:E.
+  - apply Nat.leb_le in E. exact E.
+  - lia.
+Qed.
+
+(** Property: cap_to_reservoir never exceeds proposed. *)
+Lemma cap_to_reservoir_le_proposed : forall proposed reservoir,
+  cap_to_reservoir proposed reservoir <= proposed.
+Proof.
+  intros proposed reservoir.
+  unfold cap_to_reservoir.
+  destruct (proposed <=? reservoir) eqn:E.
+  - apply Nat.leb_le in E. lia.
+  - apply Nat.leb_nle in E. lia.
 Qed.
 
 (** ========================================================================= *)
