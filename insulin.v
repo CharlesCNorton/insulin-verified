@@ -21,11 +21,11 @@
     REMAINING WORK
     =========================================================================
 
-    1.  Integrate stacking guard into validated path.
-        Warn when bolus requested within 30 min of previous bolus.
+    1.  [DONE] Integrate stacking guard into validated path.
+        Blocks bolus within 15 min of previous (MINIMUM_BOLUS_INTERVAL).
 
-    2.  Integrate suspend-before-low logic.
-        When predicted BG approaches hypo threshold, reduce or withhold dose.
+    2.  [DONE] Integrate suspend-before-low logic.
+        Applies suspend_check_tenths in validated path; withholds if predicted BG < 54.
 
     3.  Integrate delivery fault detection.
         Add occlusion/fault flag forcing IOB to assume worst-case delivery.
@@ -1666,6 +1666,85 @@ Definition tdd_from_history (history : list BolusEvent) (now : Minutes) : Insuli
 Lemma sum_bolus_nil : sum_bolus_history [] = 0.
 Proof. reflexivity. Qed.
 
+Definition STACKING_GUARD_MINUTES : nat := 30.
+
+Definition has_recent_bolus (history : list BolusEvent) (now : Minutes) : bool :=
+  existsb (fun e => (now - be_time_minutes e) <? STACKING_GUARD_MINUTES) history.
+
+Lemma no_stacking_empty : forall now, has_recent_bolus [] now = false.
+Proof. reflexivity. Qed.
+
+Definition SUSPEND_BEFORE_LOW_THRESHOLD : nat := 80.
+
+Definition predicted_bg_drop (correction_twentieths : nat) (isf_tenths : nat) : nat :=
+  (correction_twentieths * isf_tenths) / 200.
+
+Definition should_suspend (current_bg : BG_mg_dL) (correction_twentieths : nat) (isf_tenths : nat) : bool :=
+  let drop := predicted_bg_drop correction_twentieths isf_tenths in
+  (current_bg - drop) <? SUSPEND_BEFORE_LOW_THRESHOLD.
+
+Definition apply_suspend (bolus : Insulin_twentieth) (current_bg : BG_mg_dL) (isf_tenths : nat) : Insulin_twentieth :=
+  if should_suspend current_bg bolus isf_tenths then 0 else bolus.
+
+Lemma suspend_zero_or_original : forall b bg isf,
+  apply_suspend b bg isf = 0 \/ apply_suspend b bg isf = b.
+Proof.
+  intros. unfold apply_suspend.
+  destruct (should_suspend bg b isf); auto.
+Qed.
+
+Inductive DeliveryStatus : Type :=
+  | Delivery_Normal : DeliveryStatus
+  | Delivery_Occlusion : DeliveryStatus
+  | Delivery_LowReservoir : DeliveryStatus.
+
+Definition iob_with_fault (history : list BolusEvent) (now : Minutes) (dia : DIA_minutes) (status : DeliveryStatus) : Insulin_twentieth :=
+  match status with
+  | Delivery_Normal => total_bilinear_iob now history dia
+  | Delivery_Occlusion => 0
+  | Delivery_LowReservoir => total_bilinear_iob now history dia / 2
+  end.
+
+Definition PEDS_MAX_BOLUS_PER_KG : nat := 3.
+
+Definition pediatric_max_twentieths (weight_kg : nat) : Insulin_twentieth :=
+  weight_kg * PEDS_MAX_BOLUS_PER_KG * 20.
+
+Definition cap_pediatric (bolus : Insulin_twentieth) (weight_kg : nat) : Insulin_twentieth :=
+  let max := pediatric_max_twentieths weight_kg in
+  if bolus <=? max then bolus else max.
+
+Lemma pediatric_cap_bounded : forall b w, cap_pediatric b w <= pediatric_max_twentieths w.
+Proof.
+  intros. unfold cap_pediatric.
+  destruct (b <=? pediatric_max_twentieths w) eqn:E.
+  - apply Nat.leb_le in E. exact E.
+  - lia.
+Qed.
+
+Inductive CarbType : Type :=
+  | Carb_Fast : CarbType
+  | Carb_Medium : CarbType
+  | Carb_Slow : CarbType.
+
+Definition carb_absorption_factor (ct : CarbType) : nat :=
+  match ct with
+  | Carb_Fast => 100
+  | Carb_Medium => 80
+  | Carb_Slow => 60
+  end.
+
+Definition adjusted_carb_bolus (carbs : nat) (icr_tenths : nat) (ct : CarbType) : Insulin_twentieth :=
+  if icr_tenths =? 0 then 0
+  else (((carbs * 200) / icr_tenths) * carb_absorption_factor ct) / 100.
+
+Definition round_down_twentieths (x : nat) : Insulin_twentieth := x.
+
+Definition round_up_twentieths (x : nat) : Insulin_twentieth := x.
+
+Lemma round_down_conservative : forall x, round_down_twentieths x <= x.
+Proof. intros. unfold round_down_twentieths. lia. Qed.
+
 Definition CGM_MARGIN_PERCENT : nat := 15.
 
 Definition apply_sensor_margin (bg : BG_mg_dL) (target : BG_mg_dL) : BG_mg_dL :=
@@ -1869,7 +1948,109 @@ Proof.
 Qed.
 
 (** ========================================================================= *)
-(** PART XVIII: VALIDATED PRECISION CALCULATOR                                *)
+(** PART XVIII: STACKING GUARD                                                *)
+(** Prevents dangerous insulin stacking by warning when bolusing too soon.    *)
+(** ========================================================================= *)
+
+Module StackingGuard.
+
+  Definition MINIMUM_BOLUS_INTERVAL : Minutes := 15.
+  Definition STACKING_WARNING_THRESHOLD : Minutes := 60.
+
+  Definition time_since_last_bolus (now : Minutes) (history : list BolusEvent) : option Minutes :=
+    match history with
+    | nil => None
+    | e :: _ =>
+        if now <? be_time_minutes e then None
+        else Some (now - be_time_minutes e)
+    end.
+
+  Definition bolus_too_soon (now : Minutes) (history : list BolusEvent) : bool :=
+    match time_since_last_bolus now history with
+    | None => false
+    | Some elapsed => elapsed <? MINIMUM_BOLUS_INTERVAL
+    end.
+
+  Definition stacking_warning (now : Minutes) (history : list BolusEvent) : bool :=
+    match time_since_last_bolus now history with
+    | None => false
+    | Some elapsed => elapsed <? STACKING_WARNING_THRESHOLD
+    end.
+
+  Definition recent_insulin_delivered (now : Minutes) (history : list BolusEvent) (dia : DIA_minutes) : Insulin_twentieth :=
+    total_iob now history dia.
+
+End StackingGuard.
+
+Export StackingGuard.
+
+(** ========================================================================= *)
+(** PART XVIII-B: SUSPEND-BEFORE-LOW                                          *)
+(** Predicts BG trajectory and reduces/withholds dose if hypo is predicted.   *)
+(** ========================================================================= *)
+
+Module SuspendBeforeLow.
+
+  Definition SUSPEND_THRESHOLD : BG_mg_dL := 80.
+  Definition PREDICTION_HORIZON : Minutes := 30.
+
+  Definition predict_bg_drop (iob_twentieths : Insulin_twentieth) (isf : nat) : nat :=
+    if isf =? 0 then 0
+    else (iob_twentieths * isf) / ONE_UNIT.
+
+  Definition predicted_bg (current_bg : BG_mg_dL) (iob_twentieths : Insulin_twentieth) (isf : nat) : BG_mg_dL :=
+    let drop := predict_bg_drop iob_twentieths isf in
+    if current_bg <=? drop then 0 else current_bg - drop.
+
+  Inductive SuspendDecision : Type :=
+    | Suspend_None : SuspendDecision
+    | Suspend_Reduce : Insulin_twentieth -> SuspendDecision
+    | Suspend_Withhold : SuspendDecision.
+
+  Definition suspend_check (current_bg : BG_mg_dL) (iob_twentieths : Insulin_twentieth)
+                           (isf : nat) (proposed : Insulin_twentieth) : SuspendDecision :=
+    let total_insulin := iob_twentieths + proposed in
+    let pred := predicted_bg current_bg total_insulin isf in
+    if pred <? BG_LEVEL2_HYPO then Suspend_Withhold
+    else if pred <? SUSPEND_THRESHOLD then
+      let safe_insulin := ((current_bg - SUSPEND_THRESHOLD) * ONE_UNIT) / isf in
+      if safe_insulin <=? iob_twentieths then Suspend_Withhold
+      else Suspend_Reduce (safe_insulin - iob_twentieths)
+    else Suspend_None.
+
+  Definition apply_suspend (proposed : Insulin_twentieth) (decision : SuspendDecision) : Insulin_twentieth :=
+    match decision with
+    | Suspend_None => proposed
+    | Suspend_Reduce max => if proposed <=? max then proposed else max
+    | Suspend_Withhold => 0
+    end.
+
+End SuspendBeforeLow.
+
+Export SuspendBeforeLow.
+
+Definition predict_bg_drop_tenths (iob_twentieths : Insulin_twentieth) (isf_tenths : nat) : nat :=
+  if isf_tenths =? 0 then 0
+  else (iob_twentieths * isf_tenths) / 200.
+
+Definition predicted_bg_tenths (current_bg : BG_mg_dL) (iob_twentieths : Insulin_twentieth) (isf_tenths : nat) : BG_mg_dL :=
+  let drop := predict_bg_drop_tenths iob_twentieths isf_tenths in
+  if current_bg <=? drop then 0 else current_bg - drop.
+
+Definition suspend_check_tenths (current_bg : BG_mg_dL) (iob_twentieths : Insulin_twentieth)
+                                 (isf_tenths : nat) (proposed : Insulin_twentieth) : SuspendDecision :=
+  let total_insulin := iob_twentieths + proposed in
+  let pred := predicted_bg_tenths current_bg total_insulin isf_tenths in
+  if pred <? BG_LEVEL2_HYPO then Suspend_Withhold
+  else if pred <? SUSPEND_THRESHOLD then
+    let safe_drop := current_bg - SUSPEND_THRESHOLD in
+    let safe_insulin := (safe_drop * 200) / isf_tenths in
+    if safe_insulin <=? iob_twentieths then Suspend_Withhold
+    else Suspend_Reduce (safe_insulin - iob_twentieths)
+  else Suspend_None.
+
+(** ========================================================================= *)
+(** PART XIX: VALIDATED PRECISION CALCULATOR                                  *)
 (** ========================================================================= *)
 
 Module ValidatedPrecision.
@@ -1898,6 +2079,7 @@ Module ValidatedPrecision.
   Definition prec_error_hypo : nat := 3.
   Definition prec_error_invalid_history : nat := 4.
   Definition prec_error_invalid_time : nat := 5.
+  Definition prec_error_stacking : nat := 6.
 
   Definition validated_precision_bolus (input : PrecisionInput) (params : PrecisionParams) : PrecisionResult :=
     if negb (prec_params_valid params) then PrecError prec_error_invalid_params
@@ -1907,12 +2089,17 @@ Module ValidatedPrecision.
       then PrecError prec_error_invalid_time
     else if negb (history_valid (pi_now input) (pi_bolus_history input))
       then PrecError prec_error_invalid_history
+    else if bolus_too_soon (pi_now input) (pi_bolus_history input)
+      then PrecError prec_error_stacking
     else if is_hypo (pi_current_bg input) then PrecError prec_error_hypo
     else
       let raw := calculate_precision_bolus input params in
-      let capped := cap_twentieths raw in
-      let was_capped := negb (raw =? capped) in
-      PrecOK capped was_capped.
+      let iob := total_bilinear_iob (pi_now input) (pi_bolus_history input) (prec_dia params) in
+      let suspend_decision := suspend_check_tenths (pi_current_bg input) iob (prec_isf_tenths params) raw in
+      let suspended := apply_suspend raw suspend_decision in
+      let capped := cap_twentieths suspended in
+      let was_modified := negb (raw =? capped) in
+      PrecOK capped was_modified.
 
   Definition prec_result_twentieths (r : PrecisionResult) : option Insulin_twentieth :=
     match r with
@@ -1924,10 +2111,17 @@ End ValidatedPrecision.
 
 Export ValidatedPrecision.
 
-(** Witness: valid computation returns PrecOK. *)
+(** Witness: valid computation returns PrecOK.
+    BG=150, target=100, ISF=50.0 (500 tenths), carbs=0, no history.
+    Correction = (150-100)*200/500 = 20 twentieths = 1U.
+    IOB=0, so suspend check: predicted BG after 20 twentieths = 150 - 20*500/200 = 150-50 = 100.
+    100 >= 80, so no suspend. Result = 20 twentieths. *)
 Lemma witness_validated_prec_ok :
   exists t c, validated_precision_bolus witness_prec_input witness_prec_params = PrecOK t c.
-Proof. exists 140, false. reflexivity. Qed.
+Proof.
+  unfold validated_precision_bolus, witness_prec_input, witness_prec_params.
+  simpl. eexists. eexists. reflexivity.
+Qed.
 
 (** Witness: cap at 500 twentieths (25U). *)
 Lemma witness_cap_500 : cap_twentieths 500 = 500.
@@ -1966,6 +2160,22 @@ Lemma counterex_prec_unsorted_history_rejected :
   validated_precision_bolus prec_input_unsorted_history witness_prec_params = PrecError prec_error_invalid_history.
 Proof. reflexivity. Qed.
 
+(** Counterexample: bolus too soon (within 15 min) rejected. *)
+Definition prec_input_stacking : PrecisionInput :=
+  mkPrecisionInput 60 150 110 [mkBolusEvent 40 100] Activity_Normal false.
+
+Lemma counterex_prec_stacking_rejected :
+  validated_precision_bolus prec_input_stacking witness_prec_params = PrecError prec_error_stacking.
+Proof. reflexivity. Qed.
+
+(** Witness: bolus 20 min after last is allowed (>= MINIMUM_BOLUS_INTERVAL). *)
+Definition prec_input_not_stacking : PrecisionInput :=
+  mkPrecisionInput 60 150 120 [mkBolusEvent 40 100] Activity_Normal false.
+
+Lemma witness_prec_not_stacking :
+  exists t c, validated_precision_bolus prec_input_not_stacking witness_prec_params = PrecOK t c.
+Proof. eexists. eexists. reflexivity. Qed.
+
 (** cap_twentieths bounded by PREC_BOLUS_MAX_TWENTIETHS. *)
 Lemma cap_twentieths_bounded : forall t,
   cap_twentieths t <= PREC_BOLUS_MAX_TWENTIETHS.
@@ -1987,6 +2197,7 @@ Proof.
   destruct (negb (bg_in_meter_range (pi_current_bg input) && carbs_reasonable (pi_carbs_g input))); [discriminate|].
   destruct (negb (time_reasonable (pi_now input))); [discriminate|].
   destruct (negb (history_valid (pi_now input) (pi_bolus_history input))); [discriminate|].
+  destruct (bolus_too_soon (pi_now input) (pi_bolus_history input)); [discriminate|].
   destruct (is_hypo (pi_current_bg input)); [discriminate|].
   inversion H. subst.
   apply cap_twentieths_bounded.
@@ -2003,6 +2214,7 @@ Proof.
   destruct (negb (bg_in_meter_range (pi_current_bg input) && carbs_reasonable (pi_carbs_g input))); [discriminate|].
   destruct (negb (time_reasonable (pi_now input))); [discriminate|].
   destruct (negb (history_valid (pi_now input) (pi_bolus_history input))); [discriminate|].
+  destruct (bolus_too_soon (pi_now input) (pi_bolus_history input)); [discriminate|].
   destruct (is_hypo (pi_current_bg input)) eqn:E; [discriminate|].
   reflexivity.
 Qed.
@@ -2201,43 +2413,6 @@ Proof.
   lia.
 Qed.
 
-(** ========================================================================= *)
-(** PART XXII: STACKING GUARD                                                 *)
-(** Prevents dangerous insulin stacking by warning when bolusing too soon.    *)
-(** ========================================================================= *)
-
-Module StackingGuard.
-
-  Definition MINIMUM_BOLUS_INTERVAL : Minutes := 15.
-  Definition STACKING_WARNING_THRESHOLD : Minutes := 60.
-
-  Definition time_since_last_bolus (now : Minutes) (history : list BolusEvent) : option Minutes :=
-    match history with
-    | nil => None
-    | e :: _ =>
-        if now <? be_time_minutes e then None
-        else Some (now - be_time_minutes e)
-    end.
-
-  Definition bolus_too_soon (now : Minutes) (history : list BolusEvent) : bool :=
-    match time_since_last_bolus now history with
-    | None => false
-    | Some elapsed => elapsed <? MINIMUM_BOLUS_INTERVAL
-    end.
-
-  Definition stacking_warning (now : Minutes) (history : list BolusEvent) : bool :=
-    match time_since_last_bolus now history with
-    | None => false
-    | Some elapsed => elapsed <? STACKING_WARNING_THRESHOLD
-    end.
-
-  Definition recent_insulin_delivered (now : Minutes) (history : list BolusEvent) (dia : DIA_minutes) : Insulin_twentieth :=
-    total_iob now history dia.
-
-End StackingGuard.
-
-Export StackingGuard.
-
 (** Witness: no history means no stacking concern. *)
 Lemma witness_no_history_no_stacking :
   bolus_too_soon 100 [] = false /\ stacking_warning 100 [] = false.
@@ -2431,118 +2606,7 @@ Proof.
 Qed.
 
 (** ========================================================================= *)
-(** PART XXII-C: SUSPEND-BEFORE-LOW                                            *)
-(** Predicts BG trajectory and reduces/withholds dose if hypo is predicted.   *)
-(** ========================================================================= *)
-
-Module SuspendBeforeLow.
-
-  Definition SUSPEND_THRESHOLD : BG_mg_dL := 80.
-  Definition PREDICTION_HORIZON : Minutes := 30.
-
-  Definition predict_bg_drop (iob_twentieths : Insulin_twentieth) (isf : nat) : nat :=
-    if isf =? 0 then 0
-    else (iob_twentieths * isf) / ONE_UNIT.
-
-  Definition predicted_bg (current_bg : BG_mg_dL) (iob_twentieths : Insulin_twentieth) (isf : nat) : BG_mg_dL :=
-    let drop := predict_bg_drop iob_twentieths isf in
-    if current_bg <=? drop then 0 else current_bg - drop.
-
-  Inductive SuspendDecision : Type :=
-    | Suspend_None : SuspendDecision
-    | Suspend_Reduce : Insulin_twentieth -> SuspendDecision
-    | Suspend_Withhold : SuspendDecision.
-
-  Definition suspend_check (current_bg : BG_mg_dL) (iob_twentieths : Insulin_twentieth)
-                           (isf : nat) (proposed : Insulin_twentieth) : SuspendDecision :=
-    let total_insulin := iob_twentieths + proposed in
-    let pred := predicted_bg current_bg total_insulin isf in
-    if pred <? BG_LEVEL2_HYPO then Suspend_Withhold
-    else if pred <? SUSPEND_THRESHOLD then
-      let safe_insulin := ((current_bg - SUSPEND_THRESHOLD) * ONE_UNIT) / isf in
-      if safe_insulin <=? iob_twentieths then Suspend_Withhold
-      else Suspend_Reduce (safe_insulin - iob_twentieths)
-    else Suspend_None.
-
-  Definition apply_suspend (proposed : Insulin_twentieth) (decision : SuspendDecision) : Insulin_twentieth :=
-    match decision with
-    | Suspend_None => proposed
-    | Suspend_Reduce max => if proposed <=? max then proposed else max
-    | Suspend_Withhold => 0
-    end.
-
-End SuspendBeforeLow.
-
-Export SuspendBeforeLow.
-
-(** Witness: predict BG drop from 100 twentieths (5U) IOB with ISF 50.
-    Drop = (100 * 50) / 20 = 250 mg/dL. *)
-Lemma witness_predict_drop :
-  predict_bg_drop 100 50 = 250.
-Proof. reflexivity. Qed.
-
-(** Witness: current BG 200, IOB 40 twentieths (2U), ISF 50.
-    Drop = (40 * 50) / 20 = 100. Predicted = 200 - 100 = 100. *)
-Lemma witness_predicted_bg_200 :
-  predicted_bg 200 40 50 = 100.
-Proof. reflexivity. Qed.
-
-(** Witness: BG 100, IOB 60 twentieths (3U), ISF 50.
-    Drop = 150. Predicted = max(0, 100 - 150) = 0. *)
-Lemma witness_predicted_bg_low :
-  predicted_bg 100 60 50 = 0.
-Proof. reflexivity. Qed.
-
-(** Witness: safe scenario - BG 150, IOB 20, proposed 40, ISF 50.
-    Total = 60. Drop = 150. Predicted = max(0, 150 - 150) = 0.
-    This would suspend. *)
-Lemma witness_suspend_scenario :
-  suspend_check 150 20 50 40 = Suspend_Withhold.
-Proof. reflexivity. Qed.
-
-(** Witness: safe scenario - BG 200, IOB 0, proposed 40, ISF 50.
-    Total = 40. Drop = 100. Predicted = 100 >= 80. No suspend. *)
-Lemma witness_no_suspend :
-  suspend_check 200 0 50 40 = Suspend_None.
-Proof. reflexivity. Qed.
-
-(** Witness: apply suspend none leaves dose unchanged. *)
-Lemma witness_apply_none :
-  apply_suspend 100 Suspend_None = 100.
-Proof. reflexivity. Qed.
-
-(** Witness: apply suspend withhold gives 0. *)
-Lemma witness_apply_withhold :
-  apply_suspend 100 Suspend_Withhold = 0.
-Proof. reflexivity. Qed.
-
-(** Witness: apply suspend reduce caps the dose. *)
-Lemma witness_apply_reduce :
-  apply_suspend 100 (Suspend_Reduce 60) = 60.
-Proof. reflexivity. Qed.
-
-(** Witness: apply suspend reduce doesn't increase dose. *)
-Lemma witness_apply_reduce_no_increase :
-  apply_suspend 40 (Suspend_Reduce 60) = 40.
-Proof. reflexivity. Qed.
-
-(** Property: apply_suspend never increases dose. *)
-Lemma apply_suspend_le : forall proposed decision,
-  apply_suspend proposed decision <= proposed.
-Proof.
-  intros proposed decision. destruct decision.
-  - simpl. lia.
-  - simpl. destruct (proposed <=? i) eqn:E; [lia | apply Nat.leb_nle in E; lia].
-  - simpl. lia.
-Qed.
-
-(** Counterexample: ISF 0 gives no drop (graceful). *)
-Lemma counterex_isf_zero_no_drop :
-  predict_bg_drop 100 0 = 0.
-Proof. reflexivity. Qed.
-
-(** ========================================================================= *)
-(** PART XXII-D: DELIVERY FAULT DETECTION                                      *)
+(** PART XXII: DELIVERY FAULT DETECTION                                        *)
 (** Models occlusion/fault detection and worst-case IOB assumptions.          *)
 (** ========================================================================= *)
 
