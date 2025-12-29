@@ -17,6 +17,23 @@
 (*                                                                            *)
 (******************************************************************************)
 
+(** ========================================================================= *)
+(** REGULATORY CONTEXT                                                        *)
+(**                                                                           *)
+(** Insulin infusion pumps with bolus calculators are classified as FDA       *)
+(** Class II medical devices under 21 CFR 880.5725 (Infusion pump) or         *)
+(** 21 CFR 880.5730 (Alternate Controller Enabled Infusion Pump).             *)
+(**                                                                           *)
+(** References:                                                               *)
+(**   [1] 21 CFR 880.5725. Code of Federal Regulations, Title 21, Chapter I,  *)
+(**       Subchapter H, Part 880, Subpart F. U.S. Food and Drug Admin.        *)
+(**       https://www.ecfr.gov/current/title-21/section-880.5725              *)
+(**   [2] FDA. Classification of the Alternate Controller Enabled Infusion    *)
+(**       Pump. 87 Fed. Reg. 6554 (Feb. 4, 2022).                             *)
+(**   [3] FDA 510(k) K243273. CeQur Simplicity On-Demand Insulin Delivery     *)
+(**       System. Cleared Nov. 13, 2024. Class II, 21 CFR 880.5725.           *)
+(** ========================================================================= *)
+
 Require Import Coq.Arith.PeanoNat.
 Require Import Coq.Bool.Bool.
 Require Import Coq.Lists.List.
@@ -2052,7 +2069,7 @@ Module IOBDecay.
     else
       let elapsed := minutes_since_bolus now event in
       let fraction := iob_fraction_remaining elapsed dia in
-      (be_dose_twentieths event * fraction) / 100.
+      div_ceil (be_dose_twentieths event * fraction) 100.
 
   Fixpoint total_iob (now : Minutes) (events : list BolusEvent) (dia : DIA_minutes) : Insulin_twentieth :=
     match events with
@@ -2129,11 +2146,12 @@ Lemma witness_iob_fraction_beyond_dia :
 Proof. reflexivity. Qed.
 
 (** Witness: 1 unit (20 twentieths) at time 0, checked at time 120 with 4hr DIA.
-    39% remaining = 7 twentieths = 0.35U. *)
+    39% remaining, ceil(20*39/100) = ceil(7.8) = 8 twentieths = 0.40U.
+    Ceiling rounds up for conservative IOB estimation. *)
 Definition witness_bolus_event : BolusEvent := mkBolusEvent 20 0.
 
 Lemma witness_iob_at_120 :
-  iob_from_bolus 120 witness_bolus_event DIA_4_HOURS = 7.
+  iob_from_bolus 120 witness_bolus_event DIA_4_HOURS = 8.
 Proof. reflexivity. Qed.
 
 (** Witness: same bolus at time 240 (full DIA elapsed) = 0. *)
@@ -2149,19 +2167,21 @@ Lemma witness_future_bolus_no_iob :
 Proof. reflexivity. Qed.
 
 (** Witness: total IOB from two boluses with pharmacokinetic curve.
-    Bolus 1: 20 twentieths at t=0. At t=120: 39% remains = 7 twentieths.
+    Bolus 1: 20 twentieths at t=0. At t=120: 39% remains, ceil(780/100) = 8 twentieths.
     Bolus 2: 40 twentieths at t=60. At t=120: elapsed=60, still in absorption phase.
-      fraction = 100 - (60*25/75) = 80%. IOB = 40*80/100 = 32 twentieths.
-    Total = 7 + 32 = 39 twentieths. *)
+      fraction = 100 - (60*25/75) = 80%. IOB = ceil(3200/100) = 32 twentieths.
+    Total = 8 + 32 = 40 twentieths. *)
 Definition witness_bolus_1 : BolusEvent := mkBolusEvent 20 0.
 Definition witness_bolus_2 : BolusEvent := mkBolusEvent 40 60.
 
 Lemma witness_total_iob_two_boluses :
-  total_iob 120 [witness_bolus_1; witness_bolus_2] DIA_4_HOURS = 39.
+  total_iob 120 [witness_bolus_1; witness_bolus_2] DIA_4_HOURS = 40.
 Proof. reflexivity. Qed.
 
-(** Counterexample: linear model would overestimate IOB as 40 twentieths. *)
-Lemma counterex_linear_overestimates_iob :
+(** Note: linear model with floor division gives 40 twentieths.
+    Our ceiling-based curve model also gives 40 here due to exact division on bolus 2.
+    The difference shows in fractional cases like bolus 1 (7 vs 8). *)
+Lemma linear_model_comparison :
   let linear_iob1 := (20 * iob_fraction_remaining_linear 120 DIA_4_HOURS) / 100 in
   let linear_iob2 := (40 * iob_fraction_remaining_linear 60 DIA_4_HOURS) / 100 in
   linear_iob1 + linear_iob2 = 40.
@@ -2189,7 +2209,24 @@ Proof.
     nia.
 Qed.
 
-(** IOB is bounded by original dose. *)
+(** IOB is bounded by original dose.
+    With ceiling: ceil(dose * fraction / 100) <= dose when fraction <= 100.
+    Proof via auxiliary lemma about div_ceil. *)
+Lemma lt_add1_le : forall a b : nat, a < b + 1 -> a <= b.
+Proof. intros. lia. Qed.
+
+Lemma div_ceil_bounded_by_factor : forall x p,
+  x <= p * 100 -> div_ceil x 100 <= p.
+Proof.
+  intros x p Hle.
+  unfold div_ceil.
+  replace (100 =? 0) with false by reflexivity.
+  replace (x + 100 - 1) with (x + 99) by lia.
+  assert (Hlt : x + 99 < 100 * (p + 1)) by lia.
+  apply Nat.div_lt_upper_bound in Hlt; [|lia].
+  apply lt_add1_le. exact Hlt.
+Qed.
+
 Lemma iob_bounded_by_dose : forall now event dia,
   iob_from_bolus now event dia <= be_dose_twentieths event.
 Proof.
@@ -2198,7 +2235,9 @@ Proof.
   destruct (now <? be_time_minutes event) eqn:Efut.
   - lia.
   - pose proof (iob_fraction_le_100 (minutes_since_bolus now event) dia) as Hfrac.
-    apply Nat.div_le_upper_bound. lia.
+    apply div_ceil_bounded_by_factor.
+    set (dose := be_dose_twentieths event).
+    set (frac := iob_fraction_remaining (minutes_since_bolus now event) dia).
     nia.
 Qed.
 
@@ -2298,7 +2337,7 @@ Module BilinearIOB.
     else
       let elapsed := now - be_time_minutes event in
       let fraction := bilinear_iob_fraction elapsed dia in
-      (be_dose_twentieths event * fraction) / 100.
+      div_ceil (be_dose_twentieths event * fraction) 100.
 
   Fixpoint total_bilinear_iob (now : Minutes) (events : list BolusEvent) (dia : DIA_minutes) : Insulin_twentieth :=
     match events with
@@ -3708,9 +3747,10 @@ Lemma witness_bilinear_beyond_dia :
 Proof. reflexivity. Qed.
 
 (** Witness: 1U (20 twentieths) at time 0, checked at 120 min.
-    Fraction = 54%, IOB = 20 * 54 / 100 = 10 twentieths. *)
+    Fraction = 54%, IOB = ceil(20 * 54 / 100) = ceil(10.8) = 11 twentieths.
+    Ceiling rounds up for conservative IOB estimation. *)
 Lemma witness_bilinear_iob_at_120 :
-  bilinear_iob_from_bolus 120 (mkBolusEvent 20 0) DIA_4_HOURS = 10.
+  bilinear_iob_from_bolus 120 (mkBolusEvent 20 0) DIA_4_HOURS = 11.
 Proof. reflexivity. Qed.
 
 (** Witness: 1U at time 0, checked at peak (75 min).
@@ -3755,7 +3795,9 @@ Proof.
   unfold bilinear_iob_from_bolus.
   destruct (now <? be_time_minutes event); [lia|].
   pose proof (bilinear_fraction_le_100 (now - be_time_minutes event) dia) as Hfrac.
-  apply Nat.div_le_upper_bound. lia.
+  apply div_ceil_bounded_by_factor.
+  set (dose := be_dose_twentieths event).
+  set (frac := bilinear_iob_fraction (now - be_time_minutes event) dia).
   nia.
 Qed.
 
