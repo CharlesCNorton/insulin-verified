@@ -2481,10 +2481,12 @@ Definition iob_with_fault (history : list BolusEvent) (now : Minutes) (dia : DIA
   | Delivery_LowReservoir => total_bilinear_iob now history dia / 2
   end.
 
-Definition PEDS_MAX_BOLUS_PER_KG : nat := 3.
+(** Pediatric max bolus: 0.5 U/kg = 10 twentieths per kg.
+    This is stricter than the adult cap (25U) for children under 50kg. *)
+Definition PEDS_MAX_TWENTIETHS_PER_KG : nat := 10.
 
 Definition pediatric_max_twentieths (weight_kg : nat) : Insulin_twentieth :=
-  weight_kg * PEDS_MAX_BOLUS_PER_KG * 20.
+  weight_kg * PEDS_MAX_TWENTIETHS_PER_KG.
 
 Definition cap_pediatric (bolus : Insulin_twentieth) (weight_kg : nat) : Insulin_twentieth :=
   let max := pediatric_max_twentieths weight_kg in
@@ -2809,6 +2811,13 @@ Module SuspendBeforeLow.
     let drop := predict_bg_drop iob_twentieths isf in
     if current_bg <=? drop then 0 else current_bg - drop.
 
+  Definition predicted_eventual_bg (current_bg : BG_mg_dL) (iob_twentieths : Insulin_twentieth)
+                                    (cob_grams : nat) (isf : nat) : BG_mg_dL :=
+    let drop := predict_bg_drop iob_twentieths isf in
+    let rise := cob_grams * BG_RISE_PER_GRAM in
+    let bg_after_drop := if current_bg <=? drop then 0 else current_bg - drop in
+    bg_after_drop + rise.
+
   Inductive SuspendDecision : Type :=
     | Suspend_None : SuspendDecision
     | Suspend_Reduce : Insulin_twentieth -> SuspendDecision
@@ -2821,6 +2830,22 @@ Module SuspendBeforeLow.
     if pred <? BG_LEVEL2_HYPO then Suspend_Withhold
     else if pred <? SUSPEND_THRESHOLD then
       let safe_insulin := ((current_bg - SUSPEND_THRESHOLD) * ONE_UNIT) / isf in
+      if safe_insulin <=? iob_twentieths then Suspend_Withhold
+      else Suspend_Reduce (safe_insulin - iob_twentieths)
+    else Suspend_None.
+
+  Definition suspend_check_with_cob (current_bg : BG_mg_dL) (iob_twentieths : Insulin_twentieth)
+                                     (cob_grams : nat) (isf : nat) (proposed : Insulin_twentieth) : SuspendDecision :=
+    let total_insulin := iob_twentieths + proposed in
+    let pred := predicted_eventual_bg current_bg total_insulin cob_grams isf in
+    if pred <? BG_LEVEL2_HYPO then Suspend_Withhold
+    else if pred <? SUSPEND_THRESHOLD then
+      let rise_from_cob := cob_grams * BG_RISE_PER_GRAM in
+      let effective_target := if SUSPEND_THRESHOLD <=? rise_from_cob then 0
+                              else SUSPEND_THRESHOLD - rise_from_cob in
+      let safe_drop := if current_bg <=? effective_target then 0
+                       else current_bg - effective_target in
+      let safe_insulin := (safe_drop * ONE_UNIT) / isf in
       if safe_insulin <=? iob_twentieths then Suspend_Withhold
       else Suspend_Reduce (safe_insulin - iob_twentieths)
     else Suspend_None.
@@ -2855,6 +2880,67 @@ Definition suspend_check_tenths (current_bg : BG_mg_dL) (iob_twentieths : Insuli
     if safe_insulin <=? iob_twentieths then Suspend_Withhold
     else Suspend_Reduce (safe_insulin - iob_twentieths)
   else Suspend_None.
+
+Definition predicted_eventual_bg_tenths (current_bg : BG_mg_dL) (iob_twentieths : Insulin_twentieth)
+                                         (cob_grams : nat) (isf_tenths : nat) : BG_mg_dL :=
+  let drop := predict_bg_drop_tenths iob_twentieths isf_tenths in
+  let rise := cob_grams * BG_RISE_PER_GRAM in
+  let bg_after_drop := if current_bg <=? drop then 0 else current_bg - drop in
+  bg_after_drop + rise.
+
+Definition suspend_check_tenths_with_cob (current_bg : BG_mg_dL) (iob_twentieths : Insulin_twentieth)
+                                          (cob_grams : nat) (isf_tenths : nat)
+                                          (proposed : Insulin_twentieth) : SuspendDecision :=
+  if isf_tenths =? 0 then Suspend_Withhold
+  else
+    let total_insulin := iob_twentieths + proposed in
+    let pred := predicted_eventual_bg_tenths current_bg total_insulin cob_grams isf_tenths in
+    if pred <? BG_LEVEL2_HYPO then Suspend_Withhold
+    else if pred <? SUSPEND_THRESHOLD then
+      let rise_from_cob := cob_grams * BG_RISE_PER_GRAM in
+      let effective_target := if SUSPEND_THRESHOLD <=? rise_from_cob then 0
+                              else SUSPEND_THRESHOLD - rise_from_cob in
+      let safe_drop := if current_bg <=? effective_target then 0
+                       else current_bg - effective_target in
+      let safe_insulin := (safe_drop * 200) / isf_tenths in
+      if safe_insulin <=? iob_twentieths then Suspend_Withhold
+      else Suspend_Reduce (safe_insulin - iob_twentieths)
+    else Suspend_None.
+
+(** Witness: without COB, BG 100, IOB 40 (2U), ISF 500 (50.0), proposed 20 (1U).
+    Total insulin = 60 twentieths = 3U. Drop = 60*500/200 = 150 mg/dL.
+    Predicted BG = 100 - 150 = 0 (clamped). Withhold. *)
+Lemma witness_suspend_no_cob_withholds :
+  suspend_check_tenths_with_cob 100 40 0 500 20 = Suspend_Withhold.
+Proof. reflexivity. Qed.
+
+(** Witness: WITH 30g COB, same scenario.
+    Rise from COB = 30 * 4 = 120 mg/dL.
+    Eventual BG = 0 + 120 = 120 mg/dL >= 80. No suspend needed. *)
+Lemma witness_suspend_with_cob_allows :
+  suspend_check_tenths_with_cob 100 40 30 500 20 = Suspend_None.
+Proof. reflexivity. Qed.
+
+(** Counterexample: even with COB, severe hypo still withholds.
+    BG 70, IOB 100 (5U), 10g COB, ISF 500, proposed 40 (2U).
+    Total = 140. Drop = 140*500/200 = 350. After drop = 0.
+    Rise = 40. Eventual = 40 < 54 (LEVEL2_HYPO). Withhold. *)
+Lemma counterex_cob_not_enough_still_withholds :
+  suspend_check_tenths_with_cob 70 100 10 500 40 = Suspend_Withhold.
+Proof. reflexivity. Qed.
+
+(** Witness: COB prevents false suspend at moderate BG.
+    BG 120, IOB 20 (1U), 20g COB, ISF 500, proposed 40 (2U).
+    Total = 60. Drop = 60*500/200 = 150. After drop = 0.
+    Rise = 80. Eventual = 80 >= 80. Allowed. *)
+Lemma witness_cob_prevents_false_suspend :
+  suspend_check_tenths_with_cob 120 20 20 500 40 = Suspend_None.
+Proof. reflexivity. Qed.
+
+(** Counterexample: ISF=0 always withholds (division safety). *)
+Lemma counterex_suspend_isf_zero_withholds :
+  suspend_check_tenths_with_cob 150 0 30 0 20 = Suspend_Withhold.
+Proof. reflexivity. Qed.
 
 (** ========================================================================= *)
 (** PART XIX: VALIDATED PRECISION CALCULATOR                                  *)
@@ -2905,7 +2991,7 @@ Module ValidatedPrecision.
     else
       let raw := calculate_precision_bolus input params in
       let iob := total_bilinear_iob (pi_now input) (pi_bolus_history input) (prec_dia params) in
-      let suspend_decision := suspend_check_tenths (pi_current_bg input) iob (prec_isf_tenths params) raw in
+      let suspend_decision := suspend_check_tenths_with_cob (pi_current_bg input) iob (pi_carbs_g input) (prec_isf_tenths params) raw in
       let suspended := apply_suspend raw suspend_decision in
       let adult_capped := cap_twentieths suspended in
       let capped := match pi_weight_kg input with
