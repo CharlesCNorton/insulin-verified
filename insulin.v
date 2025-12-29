@@ -236,6 +236,250 @@ Lemma counterex_250g_unreasonable :
 Proof. unfold CARBS_SANITY_MAX. lia. Qed.
 
 (** ========================================================================= *)
+(** PART II-B: CARBOHYDRATE ABSORPTION MODEL                                  *)
+(** Carbs don't hit instantly. Absorption time varies by meal composition:    *)
+(**   - Fast carbs (juice, glucose tabs): 30-60 min absorption                *)
+(**   - Medium carbs (bread, rice): 60-120 min absorption                     *)
+(**   - Slow carbs (pizza, high-fat): 180-300 min absorption                  *)
+(** We model COB (carbs-on-board) analogous to IOB.                           *)
+(** ========================================================================= *)
+
+Module CarbAbsorption.
+
+  Inductive MealType : Type :=
+    | Meal_FastCarbs : MealType
+    | Meal_MediumCarbs : MealType
+    | Meal_SlowCarbs : MealType
+    | Meal_MixedMeal : MealType
+    | Meal_HighFatMeal : MealType.
+
+  Definition absorption_duration (mtype : MealType) : nat :=
+    match mtype with
+    | Meal_FastCarbs => 45
+    | Meal_MediumCarbs => 90
+    | Meal_SlowCarbs => 180
+    | Meal_MixedMeal => 120
+    | Meal_HighFatMeal => 240
+    end.
+
+  Definition absorption_peak (mtype : MealType) : nat :=
+    match mtype with
+    | Meal_FastCarbs => 15
+    | Meal_MediumCarbs => 30
+    | Meal_SlowCarbs => 60
+    | Meal_MixedMeal => 45
+    | Meal_HighFatMeal => 90
+    end.
+
+  Definition DEFAULT_MEAL : MealType := Meal_MediumCarbs.
+
+  Definition cob_fraction_remaining (elapsed : nat) (mtype : MealType) : nat :=
+    let dur := absorption_duration mtype in
+    let peak := absorption_peak mtype in
+    if dur =? 0 then 0
+    else if dur <=? elapsed then 0
+    else if elapsed <=? peak then
+      100 - ((elapsed * 30) / peak)
+    else
+      let post_peak := elapsed - peak in
+      let tail := dur - peak in
+      (70 * (tail - post_peak) * (tail - post_peak)) / (tail * tail).
+
+  Definition cob_fraction_absorbed (elapsed : nat) (mtype : MealType) : nat :=
+    100 - cob_fraction_remaining elapsed mtype.
+
+  Definition bg_rise_per_gram : nat := 4.
+
+  Definition predicted_bg_rise_from_carbs (carbs : nat) (elapsed : nat) (mtype : MealType) : nat :=
+    let absorbed_pct := cob_fraction_absorbed elapsed mtype in
+    (carbs * bg_rise_per_gram * absorbed_pct) / 100.
+
+  Record MealEvent := mkMealEvent {
+    me_carbs_g : nat;
+    me_time_minutes : nat;
+    me_meal_type : MealType
+  }.
+
+  Definition cob_from_meal (now : nat) (event : MealEvent) : nat :=
+    if now <? me_time_minutes event then me_carbs_g event
+    else
+      let elapsed := now - me_time_minutes event in
+      let fraction := cob_fraction_remaining elapsed (me_meal_type event) in
+      (me_carbs_g event * fraction) / 100.
+
+  Fixpoint total_cob (now : nat) (events : list MealEvent) : nat :=
+    match events with
+    | nil => 0
+    | e :: rest => cob_from_meal now e + total_cob now rest
+    end.
+
+  Definition bg_impact_from_meal (now : nat) (event : MealEvent) : nat :=
+    if now <? me_time_minutes event then 0
+    else
+      let elapsed := now - me_time_minutes event in
+      predicted_bg_rise_from_carbs (me_carbs_g event) elapsed (me_meal_type event).
+
+  Fixpoint total_bg_impact_from_meals (now : nat) (events : list MealEvent) : nat :=
+    match events with
+    | nil => 0
+    | e :: rest => bg_impact_from_meal now e + total_bg_impact_from_meals now rest
+    end.
+
+  Definition fat_protein_units (fat_g protein_g : nat) : nat :=
+    (fat_g * 9 + protein_g * 4) / 100.
+
+  Definition fat_protein_delay (fat_g protein_g : nat) : nat :=
+    fat_protein_units fat_g protein_g * 30.
+
+  Definition fat_protein_duration (fat_g protein_g : nat) : nat :=
+    let fpu := fat_protein_units fat_g protein_g in
+    if fpu <=? 1 then 0
+    else if fpu <=? 2 then 180
+    else if fpu <=? 3 then 240
+    else if fpu <=? 4 then 300
+    else 360.
+
+End CarbAbsorption.
+
+Export CarbAbsorption.
+
+(** Witness: fast carbs (juice) absorb in 45 min. *)
+Lemma witness_fast_carbs_duration :
+  absorption_duration Meal_FastCarbs = 45.
+Proof. reflexivity. Qed.
+
+(** Witness: high-fat meal (pizza) absorbs over 4 hours. *)
+Lemma witness_high_fat_duration :
+  absorption_duration Meal_HighFatMeal = 240.
+Proof. reflexivity. Qed.
+
+(** Witness: at time 0, 100% of carbs remain (COB = 100%). *)
+Lemma witness_cob_at_zero :
+  cob_fraction_remaining 0 Meal_MediumCarbs = 100.
+Proof. reflexivity. Qed.
+
+(** Witness: at peak (30 min for medium carbs), 70% remains. *)
+Lemma witness_cob_at_peak :
+  cob_fraction_remaining 30 Meal_MediumCarbs = 70.
+Proof. reflexivity. Qed.
+
+(** Witness: at full absorption (90 min for medium carbs), 0% remains. *)
+Lemma witness_cob_at_full_absorption :
+  cob_fraction_remaining 90 Meal_MediumCarbs = 0.
+Proof. reflexivity. Qed.
+
+(** Witness: fast carbs at 15 min (peak), 70% remains. *)
+Lemma witness_fast_carbs_at_peak :
+  cob_fraction_remaining 15 Meal_FastCarbs = 70.
+Proof. reflexivity. Qed.
+
+(** Witness: fast carbs at 45 min (full absorption), 0% remains. *)
+Lemma witness_fast_carbs_fully_absorbed :
+  cob_fraction_remaining 45 Meal_FastCarbs = 0.
+Proof. reflexivity. Qed.
+
+(** Witness: 60g carbs, medium meal, at 45 min.
+    45 min is past peak (30), post_peak=15, tail=60.
+    remaining = 70 * 45^2 / 60^2 = 70 * 2025 / 3600 = 39.
+    COB = 60 * 39 / 100 = 23g. *)
+Definition witness_meal_event : MealEvent := mkMealEvent 60 0 Meal_MediumCarbs.
+
+Lemma witness_cob_at_45 :
+  cob_from_meal 45 witness_meal_event = 23.
+Proof. reflexivity. Qed.
+
+(** Counterexample: slow carbs at 45 min still have most carbs remaining.
+    45 min is before peak (60), so still in rising phase.
+    fraction = 100 - (45*30/60) = 100 - 22 = 78. *)
+Lemma counterex_slow_carbs_still_absorbing :
+  cob_fraction_remaining 45 Meal_SlowCarbs = 78.
+Proof. reflexivity. Qed.
+
+(** Witness: BG rise from 60g carbs at 45 min (medium meal).
+    Absorbed = 100 - 39 = 61%. BG rise = 60 * 4 * 61 / 100 = 146 mg/dL. *)
+Lemma witness_bg_rise_60g_at_45 :
+  predicted_bg_rise_from_carbs 60 45 Meal_MediumCarbs = 146.
+Proof. reflexivity. Qed.
+
+(** Witness: BG rise from 60g fast carbs at 30 min.
+    30 min past peak (15), post_peak=15, tail=30.
+    remaining = 70 * 15^2 / 30^2 = 70 * 225 / 900 = 17.
+    absorbed = 83%. BG rise = 60 * 4 * 83 / 100 = 199 mg/dL. *)
+Lemma witness_bg_rise_fast_carbs_30 :
+  predicted_bg_rise_from_carbs 60 30 Meal_FastCarbs = 199.
+Proof. reflexivity. Qed.
+
+(** Counterexample: high-fat meal at 45 min has absorbed very little.
+    45 < 90 (peak), so: 100 - (45*30/90) = 100 - 15 = 85% remaining.
+    Only 15% absorbed. BG rise = 60 * 4 * 15 / 100 = 36 mg/dL. *)
+Lemma counterex_high_fat_slow_absorption :
+  predicted_bg_rise_from_carbs 60 45 Meal_HighFatMeal = 36.
+Proof. reflexivity. Qed.
+
+(** Property: COB fraction is at most 100. *)
+Lemma cob_fraction_le_100 : forall elapsed mtype,
+  cob_fraction_remaining elapsed mtype <= 100.
+Proof.
+  intros elapsed mtype.
+  unfold cob_fraction_remaining.
+  set (dur := absorption_duration mtype).
+  set (peak := absorption_peak mtype).
+  destruct (dur =? 0) eqn:Edur; [lia|].
+  destruct (dur <=? elapsed) eqn:Edur2; [lia|].
+  destruct (elapsed <=? peak) eqn:Epeak.
+  - apply Nat.leb_le in Epeak.
+    assert (Hpeak_pos: peak > 0).
+    { unfold peak, absorption_peak. destruct mtype; lia. }
+    assert (elapsed * 30 / peak <= 30).
+    { apply Nat.div_le_upper_bound. lia. nia. }
+    lia.
+  - apply Nat.leb_nle in Epeak.
+    apply Nat.leb_nle in Edur2.
+    apply Nat.eqb_neq in Edur.
+    assert (Htail: dur - peak > 0).
+    { unfold dur, peak, absorption_duration, absorption_peak. destruct mtype; lia. }
+    apply Nat.div_le_upper_bound. nia.
+    assert ((dur - peak - (elapsed - peak)) <= dur - peak) by lia.
+    nia.
+Qed.
+
+(** Property: COB is bounded by original carbs. *)
+Lemma cob_bounded_by_carbs : forall now event,
+  cob_from_meal now event <= me_carbs_g event.
+Proof.
+  intros now event.
+  unfold cob_from_meal.
+  destruct (now <? me_time_minutes event) eqn:E.
+  - lia.
+  - pose proof (cob_fraction_le_100 (now - me_time_minutes event) (me_meal_type event)) as Hfrac.
+    apply Nat.div_le_upper_bound. lia. nia.
+Qed.
+
+(** Witness: pizza (30g fat, 25g protein) has 3 FPU, 90 min delay, 240 min duration. *)
+Lemma witness_pizza_fpu : fat_protein_units 30 25 = 3.
+Proof. reflexivity. Qed.
+
+Lemma witness_pizza_delay : fat_protein_delay 30 25 = 90.
+Proof. reflexivity. Qed.
+
+Lemma witness_pizza_duration : fat_protein_duration 30 25 = 240.
+Proof. reflexivity. Qed.
+
+(** Witness: low-fat meal (5g fat, 10g protein) has 0 FPU, no extended absorption. *)
+Lemma witness_lowfat_fpu : fat_protein_units 5 10 = 0.
+Proof. reflexivity. Qed.
+
+Lemma witness_lowfat_duration : fat_protein_duration 5 10 = 0.
+Proof. reflexivity. Qed.
+
+(** Counterexample: high-fat meal (40g fat, 30g protein) has 4 FPU, 300 min duration. *)
+Lemma counterex_highfat_fpu : fat_protein_units 40 30 = 4.
+Proof. reflexivity. Qed.
+
+Lemma counterex_highfat_duration : fat_protein_duration 40 30 = 300.
+Proof. reflexivity. Qed.
+
+(** ========================================================================= *)
 (** PART III: INSULIN AND PATIENT PARAMETERS                                  *)
 (** Units: insulin in units (U), ICR in g/U, ISF in mg/dL per U.              *)
 (** ========================================================================= *)
@@ -1449,6 +1693,26 @@ Module IOBDecay.
   Definition DIA_4_HOURS : DIA_minutes := 240.
   Definition DIA_5_HOURS : DIA_minutes := 300.
 
+  Inductive InsulinType : Type :=
+    | Insulin_Fiasp : InsulinType
+    | Insulin_Lyumjev : InsulinType
+    | Insulin_Humalog : InsulinType
+    | Insulin_Novolog : InsulinType
+    | Insulin_Apidra : InsulinType
+    | Insulin_Regular : InsulinType.
+
+  Definition peak_time (itype : InsulinType) (dia : DIA_minutes) : Minutes :=
+    match itype with
+    | Insulin_Fiasp => 55
+    | Insulin_Lyumjev => 60
+    | Insulin_Humalog => 75
+    | Insulin_Novolog => 75
+    | Insulin_Apidra => 70
+    | Insulin_Regular => 120
+    end.
+
+  Definition DEFAULT_INSULIN : InsulinType := Insulin_Humalog.
+
   Record BolusEvent := mkBolusEvent {
     be_dose_twentieths : Insulin_twentieth;
     be_time_minutes : Minutes
@@ -1458,10 +1722,23 @@ Module IOBDecay.
     if now <? be_time_minutes event then 0
     else now - be_time_minutes event.
 
-  Definition iob_fraction_remaining (elapsed : Minutes) (dia : DIA_minutes) : nat :=
+  Definition iob_fraction_remaining_linear (elapsed : Minutes) (dia : DIA_minutes) : nat :=
     if dia =? 0 then 0
     else if dia <=? elapsed then 0
     else ((dia - elapsed) * 100) / dia.
+
+  Definition iob_fraction_remaining (elapsed : Minutes) (dia : DIA_minutes) : nat :=
+    if dia =? 0 then 0
+    else if dia <=? elapsed then 0
+    else
+      let peak := 75 in
+      let tail := dia - peak in
+      if elapsed <=? peak then
+        100 - ((elapsed * 25) / peak)
+      else
+        let post_peak := elapsed - peak in
+        let remaining_tail := tail - post_peak in
+        (75 * remaining_tail * remaining_tail) / (tail * tail).
 
   Definition iob_from_bolus (now : Minutes) (event : BolusEvent) (dia : DIA_minutes) : Insulin_twentieth :=
     if now <? be_time_minutes event then 0
@@ -1513,9 +1790,25 @@ Lemma witness_iob_fraction_at_zero :
   iob_fraction_remaining 0 DIA_4_HOURS = 100.
 Proof. reflexivity. Qed.
 
-(** Witness: at half DIA (120 min of 240), 50% remains. *)
+(** Witness: at peak (75 min), 75% remains (absorption phase complete). *)
+Lemma witness_iob_fraction_at_peak :
+  iob_fraction_remaining 75 DIA_4_HOURS = 75.
+Proof. reflexivity. Qed.
+
+(** Witness: at half DIA (120 min of 240), ~39% remains (quadratic tail decay). *)
 Lemma witness_iob_fraction_at_half :
-  iob_fraction_remaining 120 DIA_4_HOURS = 50.
+  iob_fraction_remaining 120 DIA_4_HOURS = 39.
+Proof. reflexivity. Qed.
+
+(** Counterexample: linear model would give 50% at half DIA, but curve gives 39%. *)
+Lemma counterex_linear_vs_curve_at_half :
+  iob_fraction_remaining_linear 120 DIA_4_HOURS = 50 /\
+  iob_fraction_remaining 120 DIA_4_HOURS = 39.
+Proof. split; reflexivity. Qed.
+
+(** Witness: at 3 hours (180 min), only ~9% remains. *)
+Lemma witness_iob_fraction_at_180 :
+  iob_fraction_remaining 180 DIA_4_HOURS = 9.
 Proof. reflexivity. Qed.
 
 (** Witness: at DIA (240 min), 0% remains. *)
@@ -1529,11 +1822,11 @@ Lemma witness_iob_fraction_beyond_dia :
 Proof. reflexivity. Qed.
 
 (** Witness: 1 unit (20 twentieths) at time 0, checked at time 120 with 4hr DIA.
-    50% remaining = 10 twentieths = 0.5U. *)
+    39% remaining = 7 twentieths = 0.35U. *)
 Definition witness_bolus_event : BolusEvent := mkBolusEvent 20 0.
 
-Lemma witness_iob_half_remaining :
-  iob_from_bolus 120 witness_bolus_event DIA_4_HOURS = 10.
+Lemma witness_iob_at_120 :
+  iob_from_bolus 120 witness_bolus_event DIA_4_HOURS = 7.
 Proof. reflexivity. Qed.
 
 (** Witness: same bolus at time 240 (full DIA elapsed) = 0. *)
@@ -1548,15 +1841,23 @@ Lemma witness_future_bolus_no_iob :
   iob_from_bolus 100 witness_future_bolus DIA_4_HOURS = 0.
 Proof. reflexivity. Qed.
 
-(** Witness: total IOB from two boluses.
-    Bolus 1: 20 twentieths at t=0. At t=120: 50% remains = 10.
-    Bolus 2: 40 twentieths at t=60. At t=120: 75% remains = 30.
-    Total = 40 twentieths. *)
+(** Witness: total IOB from two boluses with pharmacokinetic curve.
+    Bolus 1: 20 twentieths at t=0. At t=120: 39% remains = 7 twentieths.
+    Bolus 2: 40 twentieths at t=60. At t=120: elapsed=60, still in absorption phase.
+      fraction = 100 - (60*25/75) = 80%. IOB = 40*80/100 = 32 twentieths.
+    Total = 7 + 32 = 39 twentieths. *)
 Definition witness_bolus_1 : BolusEvent := mkBolusEvent 20 0.
 Definition witness_bolus_2 : BolusEvent := mkBolusEvent 40 60.
 
 Lemma witness_total_iob_two_boluses :
-  total_iob 120 [witness_bolus_1; witness_bolus_2] DIA_4_HOURS = 40.
+  total_iob 120 [witness_bolus_1; witness_bolus_2] DIA_4_HOURS = 39.
+Proof. reflexivity. Qed.
+
+(** Counterexample: linear model would overestimate IOB as 40 twentieths. *)
+Lemma counterex_linear_overestimates_iob :
+  let linear_iob1 := (20 * iob_fraction_remaining_linear 120 DIA_4_HOURS) / 100 in
+  let linear_iob2 := (40 * iob_fraction_remaining_linear 60 DIA_4_HOURS) / 100 in
+  linear_iob1 + linear_iob2 = 40.
 Proof. reflexivity. Qed.
 
 (** IOB fraction is at most 100. *)
@@ -1569,8 +1870,16 @@ Proof.
   destruct (dia <=? elapsed) eqn:E2; [lia|].
   apply Nat.leb_nle in E2.
   apply Nat.eqb_neq in E1.
-  apply Nat.div_le_upper_bound. lia.
-  nia.
+  destruct (elapsed <=? 75) eqn:E3.
+  - apply Nat.leb_le in E3.
+    assert (elapsed * 25 / 75 <= 25) by (apply Nat.div_le_upper_bound; lia).
+    lia.
+  - apply Nat.leb_nle in E3.
+    assert (Htail : dia - 75 > 0) by lia.
+    assert (Hrem : dia - 75 - (elapsed - 75) <= dia - 75) by lia.
+    apply Nat.div_le_upper_bound. nia.
+    assert ((dia - 75 - (elapsed - 75)) <= dia - 75) by lia.
+    nia.
 Qed.
 
 (** IOB is bounded by original dose. *)
@@ -1866,132 +2175,6 @@ Definition carb_absorption_factor (ct : CarbType) : nat :=
 Definition adjusted_carb_bolus (carbs : nat) (icr_tenths : nat) (ct : CarbType) : Insulin_twentieth :=
   if icr_tenths =? 0 then 0
   else (((carbs * 200) / icr_tenths) * carb_absorption_factor ct) / 100.
-
-(** ========================================================================= *)
-(** PART XV-A: CARB ABSORPTION MODEL                                          *)
-(** Models glycemic index, fat/protein delay, and extended bolus timing.      *)
-(** Source: Brand-Miller et al., "Glycemic Index and Glycemic Load" (2003).   *)
-(** ========================================================================= *)
-
-Module CarbAbsorption.
-
-  Inductive GlycemicIndex : Type :=
-    | GI_High : GlycemicIndex
-    | GI_Medium : GlycemicIndex
-    | GI_Low : GlycemicIndex.
-
-  Definition gi_peak_minutes (gi : GlycemicIndex) : nat :=
-    match gi with
-    | GI_High => 30
-    | GI_Medium => 45
-    | GI_Low => 60
-    end.
-
-  Definition gi_duration_minutes (gi : GlycemicIndex) : nat :=
-    match gi with
-    | GI_High => 90
-    | GI_Medium => 120
-    | GI_Low => 180
-    end.
-
-  Definition fat_protein_delay (fat_g protein_g : nat) : nat :=
-    let fpu := (fat_g * 9 + protein_g * 4) / 100 in
-    fpu * 30.
-
-  Definition fat_protein_extended_duration (fat_g protein_g : nat) : nat :=
-    let fpu := (fat_g * 9 + protein_g * 4) / 100 in
-    if fpu <=? 1 then 0
-    else if fpu <=? 2 then 180
-    else if fpu <=? 3 then 240
-    else if fpu <=? 4 then 300
-    else 360.
-
-  Record MealComposition := mkMealComposition {
-    meal_carbs_g : nat;
-    meal_fat_g : nat;
-    meal_protein_g : nat;
-    meal_gi : GlycemicIndex
-  }.
-
-  Inductive BolusStrategy : Type :=
-    | Strategy_Normal : BolusStrategy
-    | Strategy_Extended : nat -> nat -> BolusStrategy
-    | Strategy_DualWave : nat -> nat -> nat -> BolusStrategy.
-
-  Definition recommend_strategy (meal : MealComposition) : BolusStrategy :=
-    let fpu := (meal_fat_g meal * 9 + meal_protein_g meal * 4) / 100 in
-    if fpu <=? 1 then Strategy_Normal
-    else
-      let duration := fat_protein_extended_duration (meal_fat_g meal) (meal_protein_g meal) in
-      if fpu <=? 2 then Strategy_Extended 70 duration
-      else Strategy_DualWave 50 50 duration.
-
-  Definition carb_absorption_at_time (carbs : nat) (gi : GlycemicIndex) (elapsed : nat) : nat :=
-    let peak := gi_peak_minutes gi in
-    let duration := gi_duration_minutes gi in
-    if duration <=? elapsed then carbs
-    else if elapsed <=? peak then
-      (carbs * elapsed) / duration
-    else
-      (carbs * (peak + ((elapsed - peak) * (duration - peak)) / (duration - peak))) / duration.
-
-End CarbAbsorption.
-
-Export CarbAbsorption.
-
-(** Witness: high GI food peaks at 30 min. *)
-Lemma witness_gi_high_peak : gi_peak_minutes GI_High = 30.
-Proof. reflexivity. Qed.
-
-(** Witness: low GI food peaks at 60 min. *)
-Lemma witness_gi_low_peak : gi_peak_minutes GI_Low = 60.
-Proof. reflexivity. Qed.
-
-(** Witness: pizza meal (60g carb, 30g fat, 25g protein).
-    FPU = (30*9 + 25*4)/100 = (270 + 100)/100 = 3.
-    Delay = 3*30 = 90 min. Duration = 240 min. *)
-Definition witness_pizza_meal : MealComposition :=
-  mkMealComposition 60 30 25 GI_Medium.
-
-Lemma witness_pizza_fat_protein_delay :
-  fat_protein_delay 30 25 = 90.
-Proof. reflexivity. Qed.
-
-Lemma witness_pizza_extended_duration :
-  fat_protein_extended_duration 30 25 = 240.
-Proof. reflexivity. Qed.
-
-(** Witness: pizza recommends dual-wave bolus. *)
-Lemma witness_pizza_strategy :
-  recommend_strategy witness_pizza_meal = Strategy_DualWave 50 50 240.
-Proof. reflexivity. Qed.
-
-(** Witness: simple carb meal (45g carb, 5g fat, 10g protein).
-    FPU = (5*9 + 10*4)/100 = 85/100 = 0. Recommends normal bolus. *)
-Definition witness_simple_meal : MealComposition :=
-  mkMealComposition 45 5 10 GI_High.
-
-Lemma witness_simple_strategy :
-  recommend_strategy witness_simple_meal = Strategy_Normal.
-Proof. reflexivity. Qed.
-
-(** Counterexample: zero carb meal still computes strategy.
-    FPU = (20*9 + 30*4)/100 = 300/100 = 3. Dual-wave over 240 min. *)
-Definition counterex_zero_carb_meal : MealComposition :=
-  mkMealComposition 0 20 30 GI_Low.
-
-Lemma counterex_zero_carb_strategy :
-  recommend_strategy counterex_zero_carb_meal = Strategy_DualWave 50 50 240.
-Proof. reflexivity. Qed.
-
-(** Witness: moderate fat meal (60g carb, 15g fat, 20g protein).
-    FPU = (15*9 + 20*4)/100 = 215/100 = 2. Extended 70/30 over 180 min. *)
-Definition witness_moderate_fat_meal : MealComposition :=
-  mkMealComposition 60 15 20 GI_Medium.
-
-Lemma witness_moderate_fat_strategy :
-  recommend_strategy witness_moderate_fat_meal = Strategy_Extended 70 180.
-Proof. reflexivity. Qed.
 
 Definition round_down_twentieths (x : nat) : Insulin_twentieth := x.
 
@@ -3269,19 +3452,21 @@ Proof.
   nia.
 Qed.
 
-(** Comparison: bilinear vs linear at 120 min shows bilinear retains more IOB.
-    Linear: 50%. Bilinear: 54%. More conservative = safer. *)
-Lemma bilinear_more_conservative_at_120 :
+(** Comparison: bilinear vs pharmacokinetic curve at 120 min.
+    Bilinear: 54%. Pharmacokinetic curve: 39%. Linear would be 50%. *)
+Lemma bilinear_vs_curve_at_120 :
   bilinear_iob_fraction 120 DIA_4_HOURS = 54 /\
-  iob_fraction_remaining 120 DIA_4_HOURS = 50.
-Proof. split; reflexivity. Qed.
+  iob_fraction_remaining 120 DIA_4_HOURS = 39 /\
+  iob_fraction_remaining_linear 120 DIA_4_HOURS = 50.
+Proof. repeat split; reflexivity. Qed.
 
-(** Comparison: at peak, bilinear shows 75% vs linear 69%.
-    Bilinear accounts for rising insulin action curve. *)
-Lemma bilinear_higher_at_peak :
+(** Comparison: at peak (75 min), bilinear and curve both show 75%.
+    Linear would show 68%. The curve correctly models peak absorption. *)
+Lemma bilinear_vs_curve_at_peak :
   bilinear_iob_fraction 75 DIA_4_HOURS = 75 /\
-  iob_fraction_remaining 75 DIA_4_HOURS = 68.
-Proof. split; reflexivity. Qed.
+  iob_fraction_remaining 75 DIA_4_HOURS = 75 /\
+  iob_fraction_remaining_linear 75 DIA_4_HOURS = 68.
+Proof. repeat split; reflexivity. Qed.
 
 (** ========================================================================= *)
 (** PART XXV: NONLINEAR ISF WITNESSES AND PROPERTIES                          *)
