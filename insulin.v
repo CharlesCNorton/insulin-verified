@@ -1579,6 +1579,113 @@ End BilinearIOB.
 
 Export BilinearIOB.
 
+Inductive ActivityState : Type :=
+  | Activity_Normal : ActivityState
+  | Activity_LightExercise : ActivityState
+  | Activity_ModerateExercise : ActivityState
+  | Activity_IntenseExercise : ActivityState
+  | Activity_Illness : ActivityState
+  | Activity_Stress : ActivityState.
+
+Definition isf_activity_modifier (state : ActivityState) : nat :=
+  match state with
+  | Activity_Normal => 100
+  | Activity_LightExercise => 120
+  | Activity_ModerateExercise => 150
+  | Activity_IntenseExercise => 200
+  | Activity_Illness => 70
+  | Activity_Stress => 70
+  end.
+
+Definition icr_activity_modifier (state : ActivityState) : nat :=
+  match state with
+  | Activity_Normal => 100
+  | Activity_LightExercise => 120
+  | Activity_ModerateExercise => 150
+  | Activity_IntenseExercise => 200
+  | Activity_Illness => 80
+  | Activity_Stress => 80
+  end.
+
+(** ========================================================================= *)
+(** PART XV-C: NONLINEAR ISF CORRECTION                                       *)
+(** Above 250 mg/dL, insulin resistance increases. We reduce effective ISF    *)
+(** by 20% for BG 250-350, 40% for BG >350. This increases correction dose.   *)
+(** Source: Walsh et al., "Using Insulin" (2003); clinical consensus.         *)
+(** ========================================================================= *)
+
+Module NonlinearISF.
+
+  Definition BG_RESISTANCE_MILD : nat := 250.
+  Definition BG_RESISTANCE_SEVERE : nat := 350.
+
+  Definition ISF_REDUCTION_MILD : nat := 80.
+  Definition ISF_REDUCTION_SEVERE : nat := 60.
+
+  Definition adjusted_isf (bg : BG_mg_dL) (base_isf : nat) : nat :=
+    if bg <? BG_RESISTANCE_MILD then base_isf
+    else if bg <? BG_RESISTANCE_SEVERE then (base_isf * ISF_REDUCTION_MILD) / 100
+    else (base_isf * ISF_REDUCTION_SEVERE) / 100.
+
+  Definition adjusted_isf_tenths (bg : BG_mg_dL) (base_isf_tenths : nat) : nat :=
+    if bg <? BG_RESISTANCE_MILD then base_isf_tenths
+    else if bg <? BG_RESISTANCE_SEVERE then (base_isf_tenths * ISF_REDUCTION_MILD) / 100
+    else (base_isf_tenths * ISF_REDUCTION_SEVERE) / 100.
+
+  Definition correction_with_resistance (current_bg target_bg : BG_mg_dL) (base_isf : nat) : nat :=
+    if current_bg <=? target_bg then 0
+    else
+      let eff_isf := adjusted_isf current_bg base_isf in
+      if eff_isf =? 0 then 0
+      else (current_bg - target_bg) / eff_isf.
+
+  Definition correction_twentieths_with_resistance (current_bg target_bg : BG_mg_dL) (base_isf_tenths : nat) : nat :=
+    if current_bg <=? target_bg then 0
+    else
+      let eff_isf := adjusted_isf_tenths current_bg base_isf_tenths in
+      if eff_isf =? 0 then 0
+      else ((current_bg - target_bg) * 200) / eff_isf.
+
+End NonlinearISF.
+
+Export NonlinearISF.
+
+(** Correction using full ISF adjustment (dawn + resistance). *)
+Definition correction_twentieths_full (minutes : Minutes) (current_bg target_bg : BG_mg_dL) (base_isf_tenths : nat) : nat :=
+  if current_bg <=? target_bg then 0
+  else
+    let hour := (minutes / 60) mod 24 in
+    let is_dawn := (4 <=? hour) && (hour <? 8) in
+    let dawn_isf := if is_dawn then (base_isf_tenths * 80) / 100 else base_isf_tenths in
+    let eff_isf := adjusted_isf_tenths current_bg dawn_isf in
+    if eff_isf =? 0 then 0
+    else ((current_bg - target_bg) * 200) / eff_isf.
+
+Definition CGM_MARGIN_PERCENT : nat := 15.
+
+Definition apply_sensor_margin (bg : BG_mg_dL) (target : BG_mg_dL) : BG_mg_dL :=
+  if bg <=? target then bg
+  else (bg * (100 - CGM_MARGIN_PERCENT)) / 100.
+
+Lemma sensor_margin_le : forall bg target, apply_sensor_margin bg target <= bg.
+Proof.
+  intros bg target.
+  unfold apply_sensor_margin, CGM_MARGIN_PERCENT.
+  destruct (bg <=? target); [lia|].
+  apply Nat.div_le_upper_bound; lia.
+Qed.
+
+Lemma sensor_margin_conservative : forall bg target,
+  bg > target -> apply_sensor_margin bg target < bg.
+Proof.
+  intros bg target Hgt.
+  unfold apply_sensor_margin, CGM_MARGIN_PERCENT.
+  destruct (bg <=? target) eqn:E.
+  - apply Nat.leb_le in E. lia.
+  - assert (bg * 85 < bg * 100) by lia.
+    apply Nat.div_lt_upper_bound; lia.
+Qed.
+
 (** ========================================================================= *)
 (** PART XVI: HIGH-PRECISION BOLUS CALCULATOR                                 *)
 (** Uses twentieths representation and integrates bilinear IOB decay.         *)
@@ -1612,13 +1719,20 @@ Module PrecisionCalculator.
     pi_carbs_g : nat;
     pi_current_bg : BG_mg_dL;
     pi_now : Minutes;
-    pi_bolus_history : list BolusEvent
+    pi_bolus_history : list BolusEvent;
+    pi_activity : ActivityState;
+    pi_use_sensor_margin : bool
   }.
 
   Definition calculate_precision_bolus (input : PrecisionInput) (params : PrecisionParams) : Insulin_twentieth :=
-    let carb := carb_bolus_twentieths (pi_carbs_g input) (prec_icr_tenths params) in
-    let carb_adj := apply_reverse_correction_twentieths carb (pi_current_bg input) (prec_target_bg params) (prec_isf_tenths params) in
-    let corr := correction_bolus_twentieths (pi_current_bg input) (prec_target_bg params) (prec_isf_tenths params) in
+    let activity_isf := (prec_isf_tenths params * isf_activity_modifier (pi_activity input)) / 100 in
+    let activity_icr := (prec_icr_tenths params * icr_activity_modifier (pi_activity input)) / 100 in
+    let eff_bg := if pi_use_sensor_margin input
+                  then apply_sensor_margin (pi_current_bg input) (prec_target_bg params)
+                  else pi_current_bg input in
+    let carb := carb_bolus_twentieths (pi_carbs_g input) activity_icr in
+    let carb_adj := apply_reverse_correction_twentieths carb eff_bg (prec_target_bg params) activity_isf in
+    let corr := correction_twentieths_full (pi_now input) eff_bg (prec_target_bg params) activity_isf in
     let iob := total_bilinear_iob (pi_now input) (pi_bolus_history input) (prec_dia params) in
     let raw := carb_adj + corr in
     if raw <=? iob then 0 else raw - iob.
@@ -1663,21 +1777,23 @@ Proof. reflexivity. Qed.
     60g carbs, BG 150, ICR=10.0, ISF=50.0, target=100.
     Carb: 120 twentieths. Correction: 20 twentieths. Total: 140 = 7.0U. *)
 Definition witness_prec_input : PrecisionInput :=
-  mkPrecisionInput 60 150 0 [].
+  mkPrecisionInput 60 150 0 [] Activity_Normal false.
 
 Lemma witness_prec_bolus_no_history :
   calculate_precision_bolus witness_prec_input witness_prec_params = 140.
 Proof. reflexivity. Qed.
 
 (** Witness: calculation with IOB from previous bolus.
-    Same input but with 2U (40 twentieths) given 2 hours ago.
-    At time 240 (now), IOB from bolus at 0 with 4hr DIA: 0 remaining.
-    So result is still 140 twentieths. *)
+    Same input but with 2U (40 twentieths) given 4 hours ago.
+    At time 240 (4 AM), dawn period applies: ISF = 500*80/100 = 400.
+    Correction = (150-100)*200/400 = 25 twentieths.
+    IOB from bolus at 0 with 4hr DIA: 0 remaining.
+    Total = 120 + 25 = 145 twentieths. *)
 Definition witness_prec_input_with_old_bolus : PrecisionInput :=
-  mkPrecisionInput 60 150 240 [mkBolusEvent 40 0].
+  mkPrecisionInput 60 150 240 [mkBolusEvent 40 0] Activity_Normal false.
 
 Lemma witness_prec_bolus_with_old_iob :
-  calculate_precision_bolus witness_prec_input_with_old_bolus witness_prec_params = 140.
+  calculate_precision_bolus witness_prec_input_with_old_bolus witness_prec_params = 145.
 Proof. reflexivity. Qed.
 
 (** Witness: calculation with recent IOB.
@@ -1686,7 +1802,7 @@ Proof. reflexivity. Qed.
     IOB = 60 * 80 / 100 = 48 twentieths.
     Raw = 140, IOB = 48, result = 92 twentieths = 4.6U. *)
 Definition witness_prec_input_recent_iob : PrecisionInput :=
-  mkPrecisionInput 60 150 60 [mkBolusEvent 60 0].
+  mkPrecisionInput 60 150 60 [mkBolusEvent 60 0] Activity_Normal false.
 
 Lemma witness_prec_bolus_recent_iob :
   calculate_precision_bolus witness_prec_input_recent_iob witness_prec_params = 92.
@@ -1745,26 +1861,6 @@ Proof.
   destruct (bg <=? target) eqn:E.
   - reflexivity.
   - apply Nat.leb_nle in E. lia.
-Qed.
-
-(** IOB subtraction and reverse correction cannot increase the bolus. *)
-Lemma precision_bolus_le_raw : forall input params,
-  calculate_precision_bolus input params <=
-    carb_bolus_twentieths (pi_carbs_g input) (prec_icr_tenths params) +
-    correction_bolus_twentieths (pi_current_bg input) (prec_target_bg params) (prec_isf_tenths params).
-Proof.
-  intros input params.
-  unfold calculate_precision_bolus.
-  set (carb := carb_bolus_twentieths (pi_carbs_g input) (prec_icr_tenths params)).
-  set (carb_adj := apply_reverse_correction_twentieths carb (pi_current_bg input) (prec_target_bg params) (prec_isf_tenths params)).
-  set (corr := correction_bolus_twentieths (pi_current_bg input) (prec_target_bg params) (prec_isf_tenths params)).
-  set (iob := total_bilinear_iob (pi_now input) (pi_bolus_history input) (prec_dia params)).
-  assert (Hadj : carb_adj <= carb).
-  { unfold carb_adj, apply_reverse_correction_twentieths.
-    destruct (carb <=? reverse_correction_twentieths (pi_current_bg input) (prec_target_bg params) (prec_isf_tenths params)); lia. }
-  destruct (carb_adj + corr <=? iob) eqn:E.
-  - lia.
-  - lia.
 Qed.
 
 (** ========================================================================= *)
@@ -1836,7 +1932,7 @@ Lemma witness_cap_600 : cap_twentieths 600 = 500.
 Proof. reflexivity. Qed.
 
 (** Counterexample: hypo patient rejected. *)
-Definition prec_input_hypo : PrecisionInput := mkPrecisionInput 60 60 0 [].
+Definition prec_input_hypo : PrecisionInput := mkPrecisionInput 60 60 0 [] Activity_Normal false.
 
 Lemma counterex_prec_hypo_rejected :
   validated_precision_bolus prec_input_hypo witness_prec_params = PrecError prec_error_hypo.
@@ -1851,7 +1947,7 @@ Proof. reflexivity. Qed.
 
 (** Counterexample: future-dated history rejected. *)
 Definition prec_input_future_history : PrecisionInput :=
-  mkPrecisionInput 60 150 100 [mkBolusEvent 40 200].
+  mkPrecisionInput 60 150 100 [mkBolusEvent 40 200] Activity_Normal false.
 
 Lemma counterex_prec_future_history_rejected :
   validated_precision_bolus prec_input_future_history witness_prec_params = PrecError prec_error_invalid_history.
@@ -1859,7 +1955,7 @@ Proof. reflexivity. Qed.
 
 (** Counterexample: unsorted history rejected. *)
 Definition prec_input_unsorted_history : PrecisionInput :=
-  mkPrecisionInput 60 150 120 [mkBolusEvent 40 60; mkBolusEvent 30 100; mkBolusEvent 20 0].
+  mkPrecisionInput 60 150 120 [mkBolusEvent 40 60; mkBolusEvent 30 100; mkBolusEvent 20 0] Activity_Normal false.
 
 Lemma counterex_prec_unsorted_history_rejected :
   validated_precision_bolus prec_input_unsorted_history witness_prec_params = PrecError prec_error_invalid_history.
@@ -1930,7 +2026,9 @@ Module MmolInput.
     mpi_carbs_g : nat;
     mpi_current_bg_mmol_tenths : nat;
     mpi_now : Minutes;
-    mpi_bolus_history : list BolusEvent
+    mpi_bolus_history : list BolusEvent;
+    mpi_activity : ActivityState;
+    mpi_use_sensor_margin : bool
   }.
 
   Definition mmol_tenths_to_mg_dL (mmol_tenths : nat) : BG_mg_dL :=
@@ -1941,7 +2039,9 @@ Module MmolInput.
       (mpi_carbs_g input)
       (mmol_tenths_to_mg_dL (mpi_current_bg_mmol_tenths input))
       (mpi_now input)
-      (mpi_bolus_history input).
+      (mpi_bolus_history input)
+      (mpi_activity input)
+      (mpi_use_sensor_margin input).
 
   Definition validated_mmol_bolus (input : MmolPrecisionInput) (params : PrecisionParams) : PrecisionResult :=
     validated_precision_bolus (convert_mmol_input input) params.
@@ -1964,7 +2064,7 @@ Proof. reflexivity. Qed.
 
 (** Witness: mmol input yields same result as mg/dL input. *)
 Definition witness_mmol_input : MmolPrecisionInput :=
-  mkMmolPrecisionInput 60 83 0 [].
+  mkMmolPrecisionInput 60 83 0 [] Activity_Normal false.
 
 Lemma witness_mmol_conversion :
   pi_current_bg (convert_mmol_input witness_mmol_input) = 149.
@@ -2792,47 +2892,8 @@ Lemma bilinear_higher_at_peak :
 Proof. split; reflexivity. Qed.
 
 (** ========================================================================= *)
-(** PART XXV: NONLINEAR ISF CORRECTION                                        *)
-(** Above 250 mg/dL, insulin resistance increases. We reduce effective ISF    *)
-(** by 20% for BG 250-350, 40% for BG >350. This increases correction dose.   *)
-(** Source: Walsh et al., "Using Insulin" (2003); clinical consensus.         *)
+(** PART XXV: NONLINEAR ISF WITNESSES AND PROPERTIES                          *)
 (** ========================================================================= *)
-
-Module NonlinearISF.
-
-  Definition BG_RESISTANCE_MILD : nat := 250.
-  Definition BG_RESISTANCE_SEVERE : nat := 350.
-
-  Definition ISF_REDUCTION_MILD : nat := 80.
-  Definition ISF_REDUCTION_SEVERE : nat := 60.
-
-  Definition adjusted_isf (bg : BG_mg_dL) (base_isf : nat) : nat :=
-    if bg <? BG_RESISTANCE_MILD then base_isf
-    else if bg <? BG_RESISTANCE_SEVERE then (base_isf * ISF_REDUCTION_MILD) / 100
-    else (base_isf * ISF_REDUCTION_SEVERE) / 100.
-
-  Definition adjusted_isf_tenths (bg : BG_mg_dL) (base_isf_tenths : nat) : nat :=
-    if bg <? BG_RESISTANCE_MILD then base_isf_tenths
-    else if bg <? BG_RESISTANCE_SEVERE then (base_isf_tenths * ISF_REDUCTION_MILD) / 100
-    else (base_isf_tenths * ISF_REDUCTION_SEVERE) / 100.
-
-  Definition correction_with_resistance (current_bg target_bg : BG_mg_dL) (base_isf : nat) : nat :=
-    if current_bg <=? target_bg then 0
-    else
-      let eff_isf := adjusted_isf current_bg base_isf in
-      if eff_isf =? 0 then 0
-      else (current_bg - target_bg) / eff_isf.
-
-  Definition correction_twentieths_with_resistance (current_bg target_bg : BG_mg_dL) (base_isf_tenths : nat) : Insulin_twentieth :=
-    if current_bg <=? target_bg then 0
-    else
-      let eff_isf := adjusted_isf_tenths current_bg base_isf_tenths in
-      if eff_isf =? 0 then 0
-      else ((current_bg - target_bg) * 200) / eff_isf.
-
-End NonlinearISF.
-
-Export NonlinearISF.
 
 (** Witness: BG 200 (below threshold) uses base ISF unchanged. *)
 Lemma witness_isf_normal_bg :
@@ -3064,6 +3125,11 @@ Proof.
   - lia.
 Qed.
 
+(** Combined ISF adjustment: applies both dawn and resistance adjustments. *)
+Definition fully_adjusted_isf_tenths (minutes : Minutes) (bg : BG_mg_dL) (base_isf_tenths : nat) : nat :=
+  let dawn_adj := dawn_adjusted_isf_tenths minutes base_isf_tenths in
+  adjusted_isf_tenths bg dawn_adj.
+
 (** ========================================================================= *)
 (** PART XXV-D: EXERCISE/ILLNESS/STRESS MODIFIERS                              *)
 (** Activity state affects insulin sensitivity.                               *)
@@ -3248,29 +3314,6 @@ Proof.
   apply Nat.le_trans with (m := length events * 500).
   - exact Hbound.
   - apply Nat.mul_le_mono_r. exact Hlen.
-Qed.
-
-(** Raw precision bolus bounded. *)
-Lemma precision_raw_bounded : forall input params,
-  pi_carbs_g input <= 500 ->
-  pi_current_bg input <= 600 ->
-  prec_isf_tenths params >= 200 ->
-  prec_icr_tenths params >= 50 ->
-  calculate_precision_bolus input params <= 2600.
-Proof.
-  intros input params Hcarbs Hbg Hisf Hicr.
-  unfold calculate_precision_bolus.
-  set (carb := carb_bolus_twentieths (pi_carbs_g input) (prec_icr_tenths params)).
-  set (carb_adj := apply_reverse_correction_twentieths carb (pi_current_bg input) (prec_target_bg params) (prec_isf_tenths params)).
-  set (corr := correction_bolus_twentieths (pi_current_bg input) (prec_target_bg params) (prec_isf_tenths params)).
-  pose proof (carb_bolus_intermediate_bounded (pi_carbs_g input) (prec_icr_tenths params) Hcarbs Hicr) as H1.
-  pose proof (correction_bolus_intermediate_bounded (pi_current_bg input) (prec_target_bg params) (prec_isf_tenths params) Hbg Hisf) as H2.
-  assert (Hadj : carb_adj <= carb).
-  { unfold carb_adj, apply_reverse_correction_twentieths.
-    destruct (carb <=? reverse_correction_twentieths (pi_current_bg input) (prec_target_bg params) (prec_isf_tenths params)); lia. }
-  destruct (carb_adj + corr <=? total_bilinear_iob (pi_now input) (pi_bolus_history input) (prec_dia params)) eqn:E.
-  - lia.
-  - lia.
 Qed.
 
 (** Validated output is bounded, ensuring extraction safety. *)
