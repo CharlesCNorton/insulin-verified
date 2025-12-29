@@ -1094,6 +1094,34 @@ Module IOBDecay.
     | e :: rest => iob_from_bolus now e dia + total_iob now rest dia
     end.
 
+  Definition event_time_valid (now : Minutes) (event : BolusEvent) : bool :=
+    be_time_minutes event <=? now.
+
+  Fixpoint history_times_valid (now : Minutes) (events : list BolusEvent) : bool :=
+    match events with
+    | nil => true
+    | e :: rest => event_time_valid now e && history_times_valid now rest
+    end.
+
+  Fixpoint history_sorted_desc (events : list BolusEvent) : bool :=
+    match events with
+    | nil => true
+    | e1 :: rest =>
+        match rest with
+        | nil => true
+        | e2 :: _ => (be_time_minutes e2 <=? be_time_minutes e1) && history_sorted_desc rest
+        end
+    end.
+
+  Definition history_valid (now : Minutes) (events : list BolusEvent) : bool :=
+    history_times_valid now events && history_sorted_desc events.
+
+  Fixpoint max_event_time (events : list BolusEvent) : Minutes :=
+    match events with
+    | nil => 0
+    | e :: rest => Nat.max (be_time_minutes e) (max_event_time rest)
+    end.
+
 End IOBDecay.
 
 Export IOBDecay.
@@ -1174,6 +1202,43 @@ Proof.
   - pose proof (iob_fraction_le_100 (minutes_since_bolus now event) dia) as Hfrac.
     apply Nat.div_le_upper_bound. lia.
     nia.
+Qed.
+
+(** Witness: valid history passes validation. *)
+Definition witness_valid_history : list BolusEvent :=
+  [mkBolusEvent 40 60; mkBolusEvent 20 0].
+
+Lemma witness_valid_history_ok :
+  history_times_valid 120 witness_valid_history = true.
+Proof. reflexivity. Qed.
+
+(** Counterexample: history with future event fails validation. *)
+Definition counterex_future_history : list BolusEvent :=
+  [mkBolusEvent 40 200; mkBolusEvent 20 0].
+
+Lemma counterex_future_history_invalid :
+  history_times_valid 120 counterex_future_history = false.
+Proof. reflexivity. Qed.
+
+(** Counterexample: single future event fails. *)
+Lemma counterex_single_future_event :
+  event_time_valid 100 (mkBolusEvent 20 150) = false.
+Proof. reflexivity. Qed.
+
+(** Witness: empty history is valid. *)
+Lemma witness_empty_history_valid : forall now,
+  history_times_valid now [] = true.
+Proof. reflexivity. Qed.
+
+(** Valid history means no event is silently zeroed by the future-check. *)
+Lemma valid_event_not_future : forall now event,
+  event_time_valid now event = true ->
+  (now <? be_time_minutes event) = false.
+Proof.
+  intros now event H.
+  unfold event_time_valid in H.
+  apply Nat.leb_le in H.
+  apply Nat.ltb_nlt. lia.
 Qed.
 
 (** ========================================================================= *)
@@ -1370,7 +1435,8 @@ Module ValidatedPrecision.
 
   Definition prec_input_valid (input : PrecisionInput) : bool :=
     bg_in_meter_range (pi_current_bg input) &&
-    carbs_reasonable (pi_carbs_g input).
+    carbs_reasonable (pi_carbs_g input) &&
+    history_times_valid (pi_now input) (pi_bolus_history input).
 
   Inductive PrecisionResult : Type :=
     | PrecOK : Insulin_twentieth -> bool -> PrecisionResult
@@ -1379,10 +1445,14 @@ Module ValidatedPrecision.
   Definition prec_error_invalid_params : nat := 1.
   Definition prec_error_invalid_input : nat := 2.
   Definition prec_error_hypo : nat := 3.
+  Definition prec_error_invalid_history : nat := 4.
 
   Definition validated_precision_bolus (input : PrecisionInput) (params : PrecisionParams) : PrecisionResult :=
     if negb (prec_params_valid params) then PrecError prec_error_invalid_params
-    else if negb (prec_input_valid input) then PrecError prec_error_invalid_input
+    else if negb (bg_in_meter_range (pi_current_bg input) && carbs_reasonable (pi_carbs_g input))
+      then PrecError prec_error_invalid_input
+    else if negb (history_times_valid (pi_now input) (pi_bolus_history input))
+      then PrecError prec_error_invalid_history
     else if is_hypo (pi_current_bg input) then PrecError prec_error_hypo
     else
       let raw := calculate_precision_bolus input params in
@@ -1426,6 +1496,14 @@ Lemma counterex_prec_invalid_params :
   validated_precision_bolus witness_prec_input invalid_prec_params = PrecError prec_error_invalid_params.
 Proof. reflexivity. Qed.
 
+(** Counterexample: future-dated history rejected. *)
+Definition prec_input_future_history : PrecisionInput :=
+  mkPrecisionInput 60 150 100 [mkBolusEvent 40 200].
+
+Lemma counterex_prec_future_history_rejected :
+  validated_precision_bolus prec_input_future_history witness_prec_params = PrecError prec_error_invalid_history.
+Proof. reflexivity. Qed.
+
 (** cap_twentieths bounded by PREC_BOLUS_MAX_TWENTIETHS. *)
 Lemma cap_twentieths_bounded : forall t,
   cap_twentieths t <= PREC_BOLUS_MAX_TWENTIETHS.
@@ -1444,7 +1522,8 @@ Proof.
   intros input params t c H.
   unfold validated_precision_bolus in H.
   destruct (negb (prec_params_valid params)); [discriminate|].
-  destruct (negb (prec_input_valid input)); [discriminate|].
+  destruct (negb (bg_in_meter_range (pi_current_bg input) && carbs_reasonable (pi_carbs_g input))); [discriminate|].
+  destruct (negb (history_times_valid (pi_now input) (pi_bolus_history input))); [discriminate|].
   destruct (is_hypo (pi_current_bg input)); [discriminate|].
   inversion H. subst.
   apply cap_twentieths_bounded.
@@ -1458,9 +1537,23 @@ Proof.
   intros input params t c H.
   unfold validated_precision_bolus in H.
   destruct (negb (prec_params_valid params)); [discriminate|].
-  destruct (negb (prec_input_valid input)); [discriminate|].
+  destruct (negb (bg_in_meter_range (pi_current_bg input) && carbs_reasonable (pi_carbs_g input))); [discriminate|].
+  destruct (negb (history_times_valid (pi_now input) (pi_bolus_history input))); [discriminate|].
   destruct (is_hypo (pi_current_bg input)) eqn:E; [discriminate|].
   reflexivity.
+Qed.
+
+(** PrecOK implies history is valid. *)
+Theorem prec_ok_history_valid : forall input params t c,
+  validated_precision_bolus input params = PrecOK t c ->
+  history_times_valid (pi_now input) (pi_bolus_history input) = true.
+Proof.
+  intros input params t c H.
+  unfold validated_precision_bolus in H.
+  destruct (negb (prec_params_valid params)); [discriminate|].
+  destruct (negb (bg_in_meter_range (pi_current_bg input) && carbs_reasonable (pi_carbs_g input))); [discriminate|].
+  destruct (negb (history_times_valid (pi_now input) (pi_bolus_history input))) eqn:E; [discriminate|].
+  apply negb_false_iff in E. exact E.
 Qed.
 
 (** ========================================================================= *)
@@ -1613,10 +1706,13 @@ Proof.
     apply negb_false_iff in E. exact E.
   }
   split. {
+    unfold prec_input_valid.
     unfold validated_precision_bolus in H.
     destruct (negb (prec_params_valid params)); [discriminate|].
-    destruct (negb (prec_input_valid input)) eqn:E; [discriminate|].
-    apply negb_false_iff in E. exact E.
+    destruct (negb (bg_in_meter_range (pi_current_bg input) && carbs_reasonable (pi_carbs_g input))) eqn:E1; [discriminate|].
+    destruct (negb (history_times_valid (pi_now input) (pi_bolus_history input))) eqn:E2; [discriminate|].
+    apply negb_false_iff in E1. apply negb_false_iff in E2.
+    rewrite E1, E2. reflexivity.
   }
   split. { apply rounding_le_original. }
   pose proof (validated_prec_bounded input params t c H) as Hbound.
