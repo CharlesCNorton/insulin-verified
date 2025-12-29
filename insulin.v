@@ -4,9 +4,9 @@
 (*                    Verified Glycemic Control Arithmetic                    *)
 (*                                                                            *)
 (*     Formalizes the standard insulin bolus calculation used in insulin      *)
-(*     pumps and dosing applications. Verifies correctness of carbohydrate    *)
-(*     coverage, correction bolus, and insulin-on-board subtraction against   *)
-(*     FDA Class III safety requirements and clinical guideline arithmetic.   *)
+(*     pumps and dosing applications. Verifies arithmetic invariants for      *)
+(*     carbohydrate coverage, correction bolus, and insulin-on-board          *)
+(*     subtraction. Insulin pumps are FDA Class II devices (21 CFR 880.5725). *)
 (*                                                                            *)
 (*     "The dose makes the poison."                                           *)
 (*     - Paracelsus, 1538                                                     *)
@@ -74,7 +74,7 @@ Module BloodGlucose.
 
   Definition BG_mg_dL := nat.
 
-  Definition BG_SEVERE_HYPO : nat := 54.
+  Definition BG_LEVEL2_HYPO : nat := 54.
   Definition BG_HYPO : nat := 70.
   Definition BG_NORMAL_LOW : nat := 70.
   Definition BG_NORMAL_HIGH : nat := 100.
@@ -90,7 +90,7 @@ Export BloodGlucose.
 
 (** Sanity: thresholds are clinically ordered. *)
 Lemma thresholds_ordered :
-  BG_SEVERE_HYPO < BG_HYPO /\
+  BG_LEVEL2_HYPO < BG_HYPO /\
   BG_HYPO <= BG_NORMAL_LOW /\
   BG_NORMAL_LOW < BG_NORMAL_HIGH /\
   BG_NORMAL_HIGH <= BG_TARGET_DEFAULT /\
@@ -98,14 +98,14 @@ Lemma thresholds_ordered :
   BG_HYPER < BG_SEVERE_HYPER /\
   BG_SEVERE_HYPER < BG_DKA_RISK /\
   BG_DKA_RISK < BG_METER_MAX.
-Proof. unfold BG_SEVERE_HYPO, BG_HYPO, BG_NORMAL_LOW, BG_NORMAL_HIGH,
+Proof. unfold BG_LEVEL2_HYPO, BG_HYPO, BG_NORMAL_LOW, BG_NORMAL_HIGH,
               BG_TARGET_DEFAULT, BG_HYPER, BG_SEVERE_HYPER, BG_DKA_RISK,
               BG_METER_MAX. lia. Qed.
 
 (** Counterexample attempt: 54 is NOT in normal range. *)
-Lemma counterex_severe_hypo_not_normal :
-  ~ (BG_NORMAL_LOW <= BG_SEVERE_HYPO <= BG_NORMAL_HIGH).
-Proof. unfold BG_NORMAL_LOW, BG_SEVERE_HYPO, BG_NORMAL_HIGH. lia. Qed.
+Lemma counterex_level2_hypo_not_normal :
+  ~ (BG_NORMAL_LOW <= BG_LEVEL2_HYPO <= BG_NORMAL_HIGH).
+Proof. unfold BG_NORMAL_LOW, BG_LEVEL2_HYPO, BG_NORMAL_HIGH. lia. Qed.
 
 (** Counterexample attempt: 300 is NOT below hyperglycemia threshold. *)
 Lemma counterex_dka_is_hyper :
@@ -113,7 +113,7 @@ Lemma counterex_dka_is_hyper :
 Proof. unfold BG_DKA_RISK, BG_HYPER. lia. Qed.
 
 (** Clinical classification predicates. *)
-Definition is_severe_hypo (bg : BG_mg_dL) : bool := bg <? BG_SEVERE_HYPO.
+Definition is_level2_hypo (bg : BG_mg_dL) : bool := bg <? BG_LEVEL2_HYPO.
 Definition is_hypo (bg : BG_mg_dL) : bool := bg <? BG_HYPO.
 Definition is_normal (bg : BG_mg_dL) : bool := (BG_NORMAL_LOW <=? bg) && (bg <=? BG_NORMAL_HIGH).
 Definition is_hyper (bg : BG_mg_dL) : bool := BG_HYPER <? bg.
@@ -121,7 +121,7 @@ Definition is_severe_hyper (bg : BG_mg_dL) : bool := BG_SEVERE_HYPER <? bg.
 Definition is_dka_risk (bg : BG_mg_dL) : bool := BG_DKA_RISK <=? bg.
 
 (** Witness: BG of 50 is severe hypoglycemia. *)
-Lemma witness_50_severe_hypo : is_severe_hypo 50 = true.
+Lemma witness_50_level2_hypo : is_level2_hypo 50 = true.
 Proof. reflexivity. Qed.
 
 (** Witness: BG of 50 is also hypoglycemia (less severe includes more severe). *)
@@ -149,11 +149,11 @@ Lemma counterex_150_not_hyper : is_hyper 150 = false.
 Proof. reflexivity. Qed.
 
 (** Implication: severe hypo implies hypo. *)
-Lemma severe_hypo_implies_hypo : forall bg,
-  is_severe_hypo bg = true -> is_hypo bg = true.
+Lemma level2_hypo_implies_hypo : forall bg,
+  is_level2_hypo bg = true -> is_hypo bg = true.
 Proof.
   intros bg H.
-  unfold is_severe_hypo, is_hypo, BG_SEVERE_HYPO, BG_HYPO in *.
+  unfold is_level2_hypo, is_hypo, BG_LEVEL2_HYPO, BG_HYPO in *.
   rewrite Nat.ltb_lt in *. lia.
 Qed.
 
@@ -208,10 +208,10 @@ Module InsulinParams.
 
   Definition Insulin_U := nat.
 
-  Definition ICR_MIN : nat := 5.
-  Definition ICR_MAX : nat := 25.
-  Definition ISF_MIN : nat := 20.
-  Definition ISF_MAX : nat := 100.
+  Definition ICR_MIN : nat := 2.
+  Definition ICR_MAX : nat := 100.
+  Definition ISF_MIN : nat := 10.
+  Definition ISF_MAX : nat := 400.
 
   Definition BOLUS_SANITY_MAX : nat := 25.
 
@@ -498,6 +498,41 @@ End ReverseCorrection.
 
 Export ReverseCorrection.
 
+Module ReverseCorrectionPrecision.
+
+  Definition reverse_correction_twentieths (current_bg target_bg : BG_mg_dL) (isf_tenths : nat) : nat :=
+    if isf_tenths =? 0 then 0
+    else if target_bg <=? current_bg then 0
+    else ((target_bg - current_bg) * 200) / isf_tenths.
+
+  Definition apply_reverse_correction_twentieths (carb_bolus_tw current_bg target_bg : nat) (isf_tenths : nat) : nat :=
+    let reduction := reverse_correction_twentieths current_bg target_bg isf_tenths in
+    if carb_bolus_tw <=? reduction then 0 else carb_bolus_tw - reduction.
+
+End ReverseCorrectionPrecision.
+
+Export ReverseCorrectionPrecision.
+
+(** Witness: BG 80, target 100, ISF 50.0 (500 tenths). Reverse = (100-80)*200/500 = 8 twentieths. *)
+Lemma witness_reverse_prec_80 :
+  reverse_correction_twentieths 80 100 500 = 8.
+Proof. reflexivity. Qed.
+
+(** Witness: BG 50, target 100, ISF 50.0 (500 tenths). Reverse = (100-50)*200/500 = 20 twentieths = 1U. *)
+Lemma witness_reverse_prec_50 :
+  reverse_correction_twentieths 50 100 500 = 20.
+Proof. reflexivity. Qed.
+
+(** Witness: BG at target yields no reverse correction. *)
+Lemma witness_reverse_prec_at_target :
+  reverse_correction_twentieths 100 100 500 = 0.
+Proof. reflexivity. Qed.
+
+(** Witness: BG above target yields no reverse correction. *)
+Lemma witness_reverse_prec_above_target :
+  reverse_correction_twentieths 150 100 500 = 0.
+Proof. reflexivity. Qed.
+
 (** Witness: BG 80, target 100, ISF 50. Reverse = (100-80)/50 = 0 (integer division). *)
 Lemma witness_reverse_correction_80 :
   reverse_correction 80 100 50 = 0.
@@ -677,8 +712,8 @@ Lemma witness_predicted_bg_below_target :
   predicted_bg_after_correction 80 100 50 = 80.
 Proof. reflexivity. Qed.
 
-(** CRITICAL SAFETY THEOREM: Correction bolus never pushes BG below target. *)
-Theorem correction_never_causes_hypoglycemia : forall current_bg target_bg isf,
+(** Arithmetic safety: floor division cannot subtract more than (current - target). *)
+Theorem correction_arithmetic_bounded : forall current_bg target_bg isf,
   isf > 0 ->
   target_bg > 0 ->
   predicted_bg_after_correction current_bg target_bg isf >= target_bg \/
@@ -711,7 +746,7 @@ Proof.
 Qed.
 
 (** Corollary: With valid params, target >= BG_HYPO, so predicted >= BG_HYPO. *)
-Corollary correction_never_causes_severe_hypo : forall current_bg params,
+Corollary correction_never_causes_level2_hypo : forall current_bg params,
   params_valid params = true ->
   current_bg >= pp_target_bg params ->
   predicted_bg_after_correction current_bg (pp_target_bg params) (pp_isf params) >= BG_HYPO.
@@ -1510,8 +1545,43 @@ Lemma witness_empty_sorted :
 Proof. reflexivity. Qed.
 
 (** ========================================================================= *)
+(** PART XV-B: BILINEAR IOB DECAY MODEL                                       *)
+(** More accurate than linear: peak action at ~75 min, then decay.            *)
+(** Models rapid-acting insulin (lispro, aspart, glulisine).                  *)
+(** ========================================================================= *)
+
+Module BilinearIOB.
+
+  Definition PEAK_TIME : Minutes := 75.
+
+  Definition bilinear_iob_fraction (elapsed : Minutes) (dia : DIA_minutes) : nat :=
+    if dia =? 0 then 0
+    else if dia <=? elapsed then 0
+    else if elapsed <=? PEAK_TIME then
+      100 - (elapsed * 25) / PEAK_TIME
+    else
+      ((dia - elapsed) * 75) / (dia - PEAK_TIME).
+
+  Definition bilinear_iob_from_bolus (now : Minutes) (event : BolusEvent) (dia : DIA_minutes) : Insulin_twentieth :=
+    if now <? be_time_minutes event then 0
+    else
+      let elapsed := now - be_time_minutes event in
+      let fraction := bilinear_iob_fraction elapsed dia in
+      (be_dose_twentieths event * fraction) / 100.
+
+  Fixpoint total_bilinear_iob (now : Minutes) (events : list BolusEvent) (dia : DIA_minutes) : Insulin_twentieth :=
+    match events with
+    | nil => 0
+    | e :: rest => bilinear_iob_from_bolus now e dia + total_bilinear_iob now rest dia
+    end.
+
+End BilinearIOB.
+
+Export BilinearIOB.
+
+(** ========================================================================= *)
 (** PART XVI: HIGH-PRECISION BOLUS CALCULATOR                                 *)
-(** Uses twentieths representation and integrates IOB decay.                  *)
+(** Uses twentieths representation and integrates bilinear IOB decay.         *)
 (** ========================================================================= *)
 
 Module PrecisionCalculator.
@@ -1524,8 +1594,8 @@ Module PrecisionCalculator.
   }.
 
   Definition prec_params_valid (p : PrecisionParams) : bool :=
-    (50 <=? prec_icr_tenths p) && (prec_icr_tenths p <=? 250) &&
-    (200 <=? prec_isf_tenths p) && (prec_isf_tenths p <=? 1000) &&
+    (20 <=? prec_icr_tenths p) && (prec_icr_tenths p <=? 1000) &&
+    (100 <=? prec_isf_tenths p) && (prec_isf_tenths p <=? 4000) &&
     (BG_HYPO <=? prec_target_bg p) && (prec_target_bg p <=? BG_HYPER) &&
     (120 <=? prec_dia p) && (prec_dia p <=? 360).
 
@@ -1547,9 +1617,10 @@ Module PrecisionCalculator.
 
   Definition calculate_precision_bolus (input : PrecisionInput) (params : PrecisionParams) : Insulin_twentieth :=
     let carb := carb_bolus_twentieths (pi_carbs_g input) (prec_icr_tenths params) in
+    let carb_adj := apply_reverse_correction_twentieths carb (pi_current_bg input) (prec_target_bg params) (prec_isf_tenths params) in
     let corr := correction_bolus_twentieths (pi_current_bg input) (prec_target_bg params) (prec_isf_tenths params) in
-    let iob := total_iob (pi_now input) (pi_bolus_history input) (prec_dia params) in
-    let raw := carb + corr in
+    let iob := total_bilinear_iob (pi_now input) (pi_bolus_history input) (prec_dia params) in
+    let raw := carb_adj + corr in
     if raw <=? iob then 0 else raw - iob.
 
 End PrecisionCalculator.
@@ -1611,13 +1682,14 @@ Proof. reflexivity. Qed.
 
 (** Witness: calculation with recent IOB.
     60g carbs, BG 150, but 3U (60 twentieths) given 1 hour ago.
-    At time 60, IOB = 60 * 75/100 = 45 twentieths remaining.
-    Raw = 140, IOB = 45, result = 95 twentieths = 4.75U. *)
+    Bilinear IOB at time 60 (rising phase): fraction = 100 - (60*25)/75 = 80%.
+    IOB = 60 * 80 / 100 = 48 twentieths.
+    Raw = 140, IOB = 48, result = 92 twentieths = 4.6U. *)
 Definition witness_prec_input_recent_iob : PrecisionInput :=
   mkPrecisionInput 60 150 60 [mkBolusEvent 60 0].
 
 Lemma witness_prec_bolus_recent_iob :
-  calculate_precision_bolus witness_prec_input_recent_iob witness_prec_params = 95.
+  calculate_precision_bolus witness_prec_input_recent_iob witness_prec_params = 92.
 Proof. reflexivity. Qed.
 
 (** Counterexample: ICR=0 returns 0 (not crash). *)
@@ -1675,7 +1747,7 @@ Proof.
   - apply Nat.leb_nle in E. lia.
 Qed.
 
-(** IOB subtraction cannot increase the bolus. *)
+(** IOB subtraction and reverse correction cannot increase the bolus. *)
 Lemma precision_bolus_le_raw : forall input params,
   calculate_precision_bolus input params <=
     carb_bolus_twentieths (pi_carbs_g input) (prec_icr_tenths params) +
@@ -1683,9 +1755,14 @@ Lemma precision_bolus_le_raw : forall input params,
 Proof.
   intros input params.
   unfold calculate_precision_bolus.
-  destruct (carb_bolus_twentieths (pi_carbs_g input) (prec_icr_tenths params) +
-            correction_bolus_twentieths (pi_current_bg input) (prec_target_bg params) (prec_isf_tenths params) <=?
-            total_iob (pi_now input) (pi_bolus_history input) (prec_dia params)) eqn:E.
+  set (carb := carb_bolus_twentieths (pi_carbs_g input) (prec_icr_tenths params)).
+  set (carb_adj := apply_reverse_correction_twentieths carb (pi_current_bg input) (prec_target_bg params) (prec_isf_tenths params)).
+  set (corr := correction_bolus_twentieths (pi_current_bg input) (prec_target_bg params) (prec_isf_tenths params)).
+  set (iob := total_bilinear_iob (pi_now input) (pi_bolus_history input) (prec_dia params)).
+  assert (Hadj : carb_adj <= carb).
+  { unfold carb_adj, apply_reverse_correction_twentieths.
+    destruct (carb <=? reverse_correction_twentieths (pi_current_bg input) (prec_target_bg params) (prec_isf_tenths params)); lia. }
+  destruct (carb_adj + corr <=? iob) eqn:E.
   - lia.
   - lia.
 Qed.
@@ -1697,6 +1774,10 @@ Qed.
 Module ValidatedPrecision.
 
   Definition PREC_BOLUS_MAX_TWENTIETHS : nat := 500.
+  Definition MAX_TIME_MINUTES : nat := 525600.
+
+  Definition time_reasonable (now : Minutes) : bool :=
+    now <=? MAX_TIME_MINUTES.
 
   Definition cap_twentieths (t : Insulin_twentieth) : Insulin_twentieth :=
     if t <=? PREC_BOLUS_MAX_TWENTIETHS then t else PREC_BOLUS_MAX_TWENTIETHS.
@@ -1704,6 +1785,7 @@ Module ValidatedPrecision.
   Definition prec_input_valid (input : PrecisionInput) : bool :=
     bg_in_meter_range (pi_current_bg input) &&
     carbs_reasonable (pi_carbs_g input) &&
+    time_reasonable (pi_now input) &&
     history_valid (pi_now input) (pi_bolus_history input).
 
   Inductive PrecisionResult : Type :=
@@ -1714,11 +1796,14 @@ Module ValidatedPrecision.
   Definition prec_error_invalid_input : nat := 2.
   Definition prec_error_hypo : nat := 3.
   Definition prec_error_invalid_history : nat := 4.
+  Definition prec_error_invalid_time : nat := 5.
 
   Definition validated_precision_bolus (input : PrecisionInput) (params : PrecisionParams) : PrecisionResult :=
     if negb (prec_params_valid params) then PrecError prec_error_invalid_params
     else if negb (bg_in_meter_range (pi_current_bg input) && carbs_reasonable (pi_carbs_g input))
       then PrecError prec_error_invalid_input
+    else if negb (time_reasonable (pi_now input))
+      then PrecError prec_error_invalid_time
     else if negb (history_valid (pi_now input) (pi_bolus_history input))
       then PrecError prec_error_invalid_history
     else if is_hypo (pi_current_bg input) then PrecError prec_error_hypo
@@ -1799,6 +1884,7 @@ Proof.
   unfold validated_precision_bolus in H.
   destruct (negb (prec_params_valid params)); [discriminate|].
   destruct (negb (bg_in_meter_range (pi_current_bg input) && carbs_reasonable (pi_carbs_g input))); [discriminate|].
+  destruct (negb (time_reasonable (pi_now input))); [discriminate|].
   destruct (negb (history_valid (pi_now input) (pi_bolus_history input))); [discriminate|].
   destruct (is_hypo (pi_current_bg input)); [discriminate|].
   inversion H. subst.
@@ -1814,6 +1900,7 @@ Proof.
   unfold validated_precision_bolus in H.
   destruct (negb (prec_params_valid params)); [discriminate|].
   destruct (negb (bg_in_meter_range (pi_current_bg input) && carbs_reasonable (pi_carbs_g input))); [discriminate|].
+  destruct (negb (time_reasonable (pi_now input))); [discriminate|].
   destruct (negb (history_valid (pi_now input) (pi_bolus_history input))); [discriminate|].
   destruct (is_hypo (pi_current_bg input)) eqn:E; [discriminate|].
   reflexivity.
@@ -1828,6 +1915,7 @@ Proof.
   unfold validated_precision_bolus in H.
   destruct (negb (prec_params_valid params)); [discriminate|].
   destruct (negb (bg_in_meter_range (pi_current_bg input) && carbs_reasonable (pi_carbs_g input))); [discriminate|].
+  destruct (negb (time_reasonable (pi_now input))); [discriminate|].
   destruct (negb (history_valid (pi_now input) (pi_bolus_history input))) eqn:E; [discriminate|].
   apply negb_false_iff in E. exact E.
 Qed.
@@ -1997,9 +2085,10 @@ Proof.
     unfold validated_precision_bolus in H.
     destruct (negb (prec_params_valid params)); [discriminate|].
     destruct (negb (bg_in_meter_range (pi_current_bg input) && carbs_reasonable (pi_carbs_g input))) eqn:E1; [discriminate|].
+    destruct (negb (time_reasonable (pi_now input))) eqn:E3; [discriminate|].
     destruct (negb (history_valid (pi_now input) (pi_bolus_history input))) eqn:E2; [discriminate|].
-    apply negb_false_iff in E1. apply negb_false_iff in E2.
-    rewrite E1, E2. reflexivity.
+    apply negb_false_iff in E1. apply negb_false_iff in E2. apply negb_false_iff in E3.
+    rewrite E1, E2, E3. reflexivity.
   }
   split. { apply rounding_le_original. }
   pose proof (validated_prec_bounded input params t c H) as Hbound.
@@ -2263,7 +2352,7 @@ Module SuspendBeforeLow.
                            (isf : nat) (proposed : Insulin_twentieth) : SuspendDecision :=
     let total_insulin := iob_twentieths + proposed in
     let pred := predicted_bg current_bg total_insulin isf in
-    if pred <? BG_SEVERE_HYPO then Suspend_Withhold
+    if pred <? BG_LEVEL2_HYPO then Suspend_Withhold
     else if pred <? SUSPEND_THRESHOLD then
       let safe_insulin := ((current_bg - SUSPEND_THRESHOLD) * ONE_UNIT) / isf in
       if safe_insulin <=? iob_twentieths then Suspend_Withhold
@@ -2378,13 +2467,13 @@ Module DeliveryFault.
 
   Definition worst_case_iob (history : list BolusEvent) (fault : FaultStatus) : Insulin_twentieth :=
     match fault with
-    | Fault_Occlusion => 0
+    | Fault_Occlusion => sum_doses history
     | _ => sum_doses history
     end.
 
   Definition conservative_iob (now : Minutes) (history : list BolusEvent) (dia : DIA_minutes) (fault : FaultStatus) : Insulin_twentieth :=
     match fault with
-    | Fault_Occlusion => 0
+    | Fault_Occlusion => sum_doses history
     | _ => total_iob now history dia
     end.
 
@@ -2425,12 +2514,12 @@ Lemma witness_unknown_blocks :
   fault_blocks_bolus Fault_Unknown = true.
 Proof. reflexivity. Qed.
 
-(** Witness: occlusion assumes 0 IOB (insulin may not have been delivered). *)
-Lemma witness_occlusion_zero_iob :
-  worst_case_iob tdd_history_2 Fault_Occlusion = 0.
+(** Witness: occlusion assumes max IOB (conservative for hypoglycemia risk). *)
+Lemma witness_occlusion_max_iob :
+  worst_case_iob tdd_history_2 Fault_Occlusion = 180.
 Proof. reflexivity. Qed.
 
-(** Witness: no fault uses actual IOB. *)
+(** Witness: no fault uses sum of doses. *)
 Lemma witness_no_fault_actual_iob :
   worst_case_iob tdd_history_2 Fault_None = 180.
 Proof. reflexivity. Qed.
@@ -2601,39 +2690,8 @@ Proof.
 Qed.
 
 (** ========================================================================= *)
-(** PART XXIV: BILINEAR IOB DECAY MODEL                                       *)
-(** More accurate than linear: peak action at ~75 min, then decay.            *)
-(** Models rapid-acting insulin (lispro, aspart, glulisine).                  *)
+(** PART XXIV: BILINEAR IOB WITNESSES AND PROPERTIES                          *)
 (** ========================================================================= *)
-
-Module BilinearIOB.
-
-  Definition PEAK_TIME : Minutes := 75.
-
-  Definition bilinear_iob_fraction (elapsed : Minutes) (dia : DIA_minutes) : nat :=
-    if dia =? 0 then 0
-    else if dia <=? elapsed then 0
-    else if elapsed <=? PEAK_TIME then
-      100 - (elapsed * 25) / PEAK_TIME
-    else
-      ((dia - elapsed) * 75) / (dia - PEAK_TIME).
-
-  Definition bilinear_iob_from_bolus (now : Minutes) (event : BolusEvent) (dia : DIA_minutes) : Insulin_twentieth :=
-    if now <? be_time_minutes event then 0
-    else
-      let elapsed := now - be_time_minutes event in
-      let fraction := bilinear_iob_fraction elapsed dia in
-      (be_dose_twentieths event * fraction) / 100.
-
-  Fixpoint total_bilinear_iob (now : Minutes) (events : list BolusEvent) (dia : DIA_minutes) : Insulin_twentieth :=
-    match events with
-    | nil => 0
-    | e :: rest => bilinear_iob_from_bolus now e dia + total_bilinear_iob now rest dia
-    end.
-
-End BilinearIOB.
-
-Export BilinearIOB.
 
 (** Witness: at time 0, 100% of insulin remains. *)
 Lemma witness_bilinear_at_zero :
@@ -3202,11 +3260,15 @@ Lemma precision_raw_bounded : forall input params,
 Proof.
   intros input params Hcarbs Hbg Hisf Hicr.
   unfold calculate_precision_bolus.
+  set (carb := carb_bolus_twentieths (pi_carbs_g input) (prec_icr_tenths params)).
+  set (carb_adj := apply_reverse_correction_twentieths carb (pi_current_bg input) (prec_target_bg params) (prec_isf_tenths params)).
+  set (corr := correction_bolus_twentieths (pi_current_bg input) (prec_target_bg params) (prec_isf_tenths params)).
   pose proof (carb_bolus_intermediate_bounded (pi_carbs_g input) (prec_icr_tenths params) Hcarbs Hicr) as H1.
   pose proof (correction_bolus_intermediate_bounded (pi_current_bg input) (prec_target_bg params) (prec_isf_tenths params) Hbg Hisf) as H2.
-  destruct (carb_bolus_twentieths (pi_carbs_g input) (prec_icr_tenths params) +
-            correction_bolus_twentieths (pi_current_bg input) (prec_target_bg params) (prec_isf_tenths params) <=?
-            total_iob (pi_now input) (pi_bolus_history input) (prec_dia params)) eqn:E.
+  assert (Hadj : carb_adj <= carb).
+  { unfold carb_adj, apply_reverse_correction_twentieths.
+    destruct (carb <=? reverse_correction_twentieths (pi_current_bg input) (prec_target_bg params) (prec_isf_tenths params)); lia. }
+  destruct (carb_adj + corr <=? total_bilinear_iob (pi_now input) (pi_bolus_history input) (prec_dia params)) eqn:E.
   - lia.
   - lia.
 Qed.
