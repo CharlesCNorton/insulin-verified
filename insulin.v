@@ -20,6 +20,7 @@
 Require Import Coq.Arith.PeanoNat.
 Require Import Coq.Bool.Bool.
 Require Import Coq.Lists.List.
+Require Import Coq.ZArith.ZArith.
 Import ListNotations.
 Require Import Lia.
 
@@ -511,6 +512,213 @@ End InsulinParams.
 
 Export InsulinParams.
 
+(** ========================================================================= *)
+(** PART III-B: TIME-OF-DAY ISF VARIABILITY                                   *)
+(** ISF varies 2-3x by time of day due to circadian rhythms.                  *)
+(** Dawn phenomenon: 3-8 AM, insulin resistance increases.                    *)
+(** Source: Bolli GB, "Dawn phenomenon" (1988), Diabetes Care.               *)
+(** ========================================================================= *)
+
+Module ISFVariability.
+
+  Inductive TimeOfDay : Type :=
+    | TOD_Dawn : TimeOfDay
+    | TOD_Morning : TimeOfDay
+    | TOD_Afternoon : TimeOfDay
+    | TOD_Evening : TimeOfDay
+    | TOD_Night : TimeOfDay.
+
+  Definition hour_to_tod (hour : nat) : TimeOfDay :=
+    if hour <? 3 then TOD_Night
+    else if hour <? 8 then TOD_Dawn
+    else if hour <? 12 then TOD_Morning
+    else if hour <? 17 then TOD_Afternoon
+    else if hour <? 21 then TOD_Evening
+    else TOD_Night.
+
+  Definition isf_adjustment_percent (tod : TimeOfDay) : nat :=
+    match tod with
+    | TOD_Dawn => 70
+    | TOD_Morning => 90
+    | TOD_Afternoon => 100
+    | TOD_Evening => 95
+    | TOD_Night => 110
+    end.
+
+  Definition adjusted_isf_by_time (base_isf : nat) (tod : TimeOfDay) : nat :=
+    (base_isf * isf_adjustment_percent tod) / 100.
+
+  Definition adjusted_isf_by_hour (base_isf : nat) (hour : nat) : nat :=
+    adjusted_isf_by_time base_isf (hour_to_tod hour).
+
+End ISFVariability.
+
+Export ISFVariability.
+
+(** Witness: 5 AM is dawn, ISF reduced to 70%. Base ISF 50 -> 35. *)
+Lemma witness_dawn_isf : adjusted_isf_by_hour 50 5 = 35.
+Proof. reflexivity. Qed.
+
+(** Witness: 2 PM is afternoon, ISF unchanged. Base ISF 50 -> 50. *)
+Lemma witness_afternoon_isf : adjusted_isf_by_hour 50 14 = 50.
+Proof. reflexivity. Qed.
+
+(** Witness: 11 PM is night, ISF increased to 110%. Base ISF 50 -> 55. *)
+Lemma witness_night_isf : adjusted_isf_by_hour 50 23 = 55.
+Proof. reflexivity. Qed.
+
+(** Counterexample: dawn (6 AM) requires 43% more insulin than night (2 AM).
+    Dawn ISF = 35, Night ISF = 55. Correction for 50 mg/dL delta:
+    Dawn: 50/35 = 1.4U. Night: 50/55 = 0.9U. *)
+Lemma counterex_dawn_vs_night :
+  let dawn_isf := adjusted_isf_by_hour 50 6 in
+  let night_isf := adjusted_isf_by_hour 50 2 in
+  dawn_isf = 35 /\ night_isf = 55.
+Proof. split; reflexivity. Qed.
+
+(** Property: adjusted ISF is always positive when base ISF >= 2.
+    (ISF is always >= 10 per ISF_MIN, so this is safe.) *)
+Lemma adjusted_isf_positive : forall base tod,
+  base >= 2 -> adjusted_isf_by_time base tod > 0.
+Proof.
+  intros base tod Hbase.
+  unfold adjusted_isf_by_time, isf_adjustment_percent.
+  destruct tod; apply Nat.div_str_pos; nia.
+Qed.
+
+(** Property: adjusted ISF is bounded by base ISF * 1.1 (night max). *)
+Lemma adjusted_isf_bounded : forall base tod,
+  adjusted_isf_by_time base tod <= (base * 110) / 100.
+Proof.
+  intros base tod.
+  unfold adjusted_isf_by_time, isf_adjustment_percent.
+  destruct tod; apply Nat.div_le_mono; lia.
+Qed.
+
+(** ========================================================================= *)
+(** PART III-C: CGM TREND INTEGRATION                                         *)
+(** Modern pumps adjust boluses based on glucose trend arrows.                *)
+(** Predicts BG 15-30 min ahead and adjusts correction accordingly.           *)
+(** Source: Pettus J, "Glucose Rate of Change" (2019), J Diabetes Sci Tech.  *)
+(** ========================================================================= *)
+
+Module CGMTrend.
+
+  Inductive TrendArrow : Type :=
+    | Trend_RisingRapidly : TrendArrow
+    | Trend_Rising : TrendArrow
+    | Trend_RisingSlowly : TrendArrow
+    | Trend_Stable : TrendArrow
+    | Trend_FallingSlowly : TrendArrow
+    | Trend_Falling : TrendArrow
+    | Trend_FallingRapidly : TrendArrow.
+
+  Definition trend_rate_mg_per_min (t : TrendArrow) : Z :=
+    match t with
+    | Trend_RisingRapidly => 3
+    | Trend_Rising => 2
+    | Trend_RisingSlowly => 1
+    | Trend_Stable => 0
+    | Trend_FallingSlowly => (-1)
+    | Trend_Falling => (-2)
+    | Trend_FallingRapidly => (-3)
+    end.
+
+  Definition PREDICTION_HORIZON_MIN : nat := 20.
+
+  Definition predicted_bg_from_trend (current_bg : nat) (trend : TrendArrow) : nat :=
+    let rate := trend_rate_mg_per_min trend in
+    let delta := (rate * Z.of_nat PREDICTION_HORIZON_MIN)%Z in
+    if (delta <? 0)%Z then
+      let neg_delta := Z.to_nat (Z.opp delta) in
+      if current_bg <=? neg_delta then 0
+      else current_bg - neg_delta
+    else
+      current_bg + Z.to_nat delta.
+
+  Definition trend_correction_adjustment (trend : TrendArrow) (isf : nat) : Z :=
+    let rate := trend_rate_mg_per_min trend in
+    let bg_delta := (rate * Z.of_nat PREDICTION_HORIZON_MIN)%Z in
+    if isf =? 0 then 0%Z
+    else (bg_delta / Z.of_nat isf)%Z.
+
+  Definition apply_trend_to_correction (base_correction : nat) (trend : TrendArrow) (isf : nat) : nat :=
+    let adj := trend_correction_adjustment trend isf in
+    if (adj <? 0)%Z then
+      let neg := Z.to_nat (Z.opp adj) in
+      if base_correction <=? neg then 0
+      else base_correction - neg
+    else
+      base_correction + Z.to_nat adj.
+
+  Definition trend_is_rising (t : TrendArrow) : bool :=
+    match t with
+    | Trend_RisingRapidly | Trend_Rising | Trend_RisingSlowly => true
+    | _ => false
+    end.
+
+  Definition trend_is_falling (t : TrendArrow) : bool :=
+    match t with
+    | Trend_FallingRapidly | Trend_Falling | Trend_FallingSlowly => true
+    | _ => false
+    end.
+
+End CGMTrend.
+
+Export CGMTrend.
+
+(** Witness: rising rapidly at BG 150 predicts 150 + 3*20 = 210 in 20 min. *)
+Lemma witness_rising_rapidly_prediction :
+  predicted_bg_from_trend 150 Trend_RisingRapidly = 210.
+Proof. reflexivity. Qed.
+
+(** Witness: falling rapidly at BG 150 predicts 150 - 3*20 = 90 in 20 min. *)
+Lemma witness_falling_rapidly_prediction :
+  predicted_bg_from_trend 150 Trend_FallingRapidly = 90.
+Proof. reflexivity. Qed.
+
+(** Witness: stable trend predicts same BG. *)
+Lemma witness_stable_prediction :
+  predicted_bg_from_trend 150 Trend_Stable = 150.
+Proof. reflexivity. Qed.
+
+(** Witness: rising rapidly adds to correction. Base 2U, ISF 50.
+    Adjustment = 60 / 50 = 1U. Total = 3U. *)
+Lemma witness_rising_adds_correction :
+  apply_trend_to_correction 2 Trend_RisingRapidly 50 = 3.
+Proof. reflexivity. Qed.
+
+(** Witness: falling rapidly subtracts from correction. Base 3U, ISF 50.
+    Adjustment = -60 / 50 = -2U (floor division). Total = 3 - 2 = 1U. *)
+Lemma witness_falling_subtracts_correction :
+  apply_trend_to_correction 3 Trend_FallingRapidly 50 = 1.
+Proof. reflexivity. Qed.
+
+(** Counterexample: falling rapidly with small correction goes to 0, not negative.
+    Base 0.5U (in twentieths, but here as 0), adjustment -1. Result = 0. *)
+Lemma counterex_falling_floors_at_zero :
+  apply_trend_to_correction 0 Trend_FallingRapidly 50 = 0.
+Proof. reflexivity. Qed.
+
+(** Counterexample: falling at low BG predicts 0, not negative.
+    BG 40, falling rapidly: 40 - 60 would be negative, so 0. *)
+Lemma counterex_low_bg_floors_at_zero :
+  predicted_bg_from_trend 40 Trend_FallingRapidly = 0.
+Proof. reflexivity. Qed.
+
+(** Witness: stable trend at any ISF does not change correction. *)
+Lemma witness_stable_isf50 : apply_trend_to_correction 5 Trend_Stable 50 = 5.
+Proof. reflexivity. Qed.
+
+Lemma witness_stable_isf30 : apply_trend_to_correction 3 Trend_Stable 30 = 3.
+Proof. reflexivity. Qed.
+
+(** Witness: rising slowly adds less than rising rapidly. *)
+Lemma witness_rising_slowly_vs_rapidly :
+  apply_trend_to_correction 2 Trend_RisingSlowly 50 = 2 /\
+  apply_trend_to_correction 2 Trend_RisingRapidly 50 = 3.
+Proof. split; reflexivity. Qed.
+
 (** Sanity: parameter bounds are ordered. *)
 Lemma param_bounds_ordered :
   ICR_MIN < ICR_MAX /\ ISF_MIN < ISF_MAX.
@@ -755,6 +963,105 @@ Qed.
 Lemma iob_subtraction_nonneg : forall bolus iob,
   0 <= subtract_iob bolus iob.
 Proof. intros. lia. Qed.
+
+(** ========================================================================= *)
+(** PART VI-A: EVENTUAL BG PREDICTION                                         *)
+(** Predicts BG after IOB and COB effects complete, plus trend projection.    *)
+(** Used by Loop/OpenAPS for smarter bolus decisions.                         *)
+(** Source: OpenAPS oref0 documentation, "Eventual BG" calculation.           *)
+(** ========================================================================= *)
+
+Module EventualBG.
+
+  Definition BG_RISE_PER_GRAM : nat := 4.
+  Definition BG_DROP_PER_TWENTIETH : nat := 3.
+
+  Definition bg_impact_from_iob (iob_twentieths : nat) (isf : nat) : nat :=
+    if isf =? 0 then 0
+    else (iob_twentieths * isf) / 20.
+
+  Definition bg_impact_from_cob (cob_grams : nat) : nat :=
+    cob_grams * BG_RISE_PER_GRAM.
+
+  Definition eventual_bg (current_bg : nat) (iob_twentieths : nat) (cob_grams : nat) (isf : nat) : nat :=
+    let drop_from_iob := bg_impact_from_iob iob_twentieths isf in
+    let rise_from_cob := bg_impact_from_cob cob_grams in
+    let bg_after_iob := if current_bg <=? drop_from_iob then 0 else current_bg - drop_from_iob in
+    bg_after_iob + rise_from_cob.
+
+  Definition eventual_bg_with_trend (current_bg : nat) (iob_twentieths : nat) (cob_grams : nat)
+                                     (isf : nat) (trend_delta : nat) (trend_rising : bool) : nat :=
+    let base_eventual := eventual_bg current_bg iob_twentieths cob_grams isf in
+    if trend_rising then
+      base_eventual + trend_delta
+    else
+      if base_eventual <=? trend_delta then 0 else base_eventual - trend_delta.
+
+  Definition should_reduce_bolus (eventual_bg target : nat) : bool :=
+    eventual_bg <? target.
+
+  Definition smart_reverse_correction (eventual_bg target_bg : nat) (isf : nat) : nat :=
+    if isf =? 0 then 0
+    else if target_bg <=? eventual_bg then 0
+    else (target_bg - eventual_bg) / isf.
+
+End EventualBG.
+
+Export EventualBG.
+
+(** Witness: BG 150, 2U IOB (40 twentieths), no COB, ISF 50.
+    IOB drop = 40 * 50 / 20 = 100 mg/dL.
+    Eventual BG = 150 - 100 + 0 = 50 mg/dL. *)
+Lemma witness_eventual_bg_iob_only :
+  eventual_bg 150 40 0 50 = 50.
+Proof. reflexivity. Qed.
+
+(** Witness: BG 100, no IOB, 30g COB.
+    COB rise = 30 * 4 = 120 mg/dL.
+    Eventual BG = 100 - 0 + 120 = 220 mg/dL. *)
+Lemma witness_eventual_bg_cob_only :
+  eventual_bg 100 0 30 50 = 220.
+Proof. reflexivity. Qed.
+
+(** Witness: BG 120, 1U IOB (20 twentieths), 15g COB, ISF 50.
+    IOB drop = 20 * 50 / 20 = 50 mg/dL.
+    COB rise = 15 * 4 = 60 mg/dL.
+    Eventual BG = 120 - 50 + 60 = 130 mg/dL. *)
+Lemma witness_eventual_bg_mixed :
+  eventual_bg 120 20 15 50 = 130.
+Proof. reflexivity. Qed.
+
+(** Counterexample: large IOB can push eventual BG to 0 (not negative).
+    BG 80, 3U IOB (60 twentieths), no COB, ISF 50.
+    IOB drop = 60 * 50 / 20 = 150 mg/dL.
+    80 <= 150, so floors at 0. *)
+Lemma counterex_eventual_floors_at_zero :
+  eventual_bg 80 60 0 50 = 0.
+Proof. reflexivity. Qed.
+
+(** Witness: current BG 80 (low), but eventual BG 160 (will rise from COB).
+    No reverse correction should apply because eventual > target. *)
+Lemma witness_no_reverse_when_eventual_high :
+  let ebg := eventual_bg 80 0 20 50 in
+  ebg = 160 /\ smart_reverse_correction ebg 100 50 = 0.
+Proof. split; reflexivity. Qed.
+
+(** Witness: current BG 150 (high), but eventual BG 50 (will drop from IOB).
+    Smart reverse should apply: (100 - 50) / 50 = 1U reduction. *)
+Lemma witness_reverse_when_eventual_low :
+  let ebg := eventual_bg 150 40 0 50 in
+  ebg = 50 /\ smart_reverse_correction ebg 100 50 = 1.
+Proof. split; reflexivity. Qed.
+
+(** Witness: with rising trend, eventual BG increases. *)
+Lemma witness_eventual_with_rising_trend :
+  eventual_bg_with_trend 100 0 0 50 60 true = 160.
+Proof. reflexivity. Qed.
+
+(** Witness: with falling trend, eventual BG decreases. *)
+Lemma witness_eventual_with_falling_trend :
+  eventual_bg_with_trend 100 0 0 50 30 false = 70.
+Proof. reflexivity. Qed.
 
 (** ========================================================================= *)
 (** PART VI-B: REVERSE CORRECTION                                             *)
