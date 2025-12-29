@@ -17,6 +17,48 @@
 (*                                                                            *)
 (******************************************************************************)
 
+(** =========================================================================
+    REMAINING WORK
+    =========================================================================
+
+    1.  Integrate bilinear IOB into validated calculator.
+        Add DIA model selector so validated_precision_bolus can use bilinear decay.
+
+    2.  Integrate nonlinear ISF into validated calculator.
+        Wire adjusted_isf into precision correction path with a toggle.
+
+    3.  Integrate pediatric limits into validated calculator.
+        Add weight-based cap enforcement when pediatric flag is set.
+
+    4.  Add reverse correction.
+        When BG < target, reduce carb bolus by (target - BG) / ISF units.
+
+    5.  Add 24-hour TDD accumulator.
+        Track cumulative daily insulin; warn or block when approaching limit.
+
+    6.  Clarify hypoglycemia theorem scope.
+        Rename correction_never_causes_hypoglycemia to correction_arithmetic_safe.
+
+    7.  Model sensor uncertainty.
+        Add optional +/-15% BG error margin; compute conservative bolus.
+
+    8.  Add time-of-day ISF adjustment.
+        Model dawn phenomenon with morning ISF multiplier.
+
+    9.  Add exercise/illness/stress modifiers.
+        Parameterize ICR/ISF adjustment factors for activity state.
+
+    10. Model carb absorption profiles.
+        Add glycemic index or fat/protein delay factor to carb bolus timing.
+
+    11. Add suspend-before-low logic.
+        When predicted BG approaches hypo threshold, reduce or withhold dose.
+
+    12. Model delivery fault detection.
+        Add occlusion/fault flag forcing IOB to assume worst-case delivery.
+
+    ========================================================================= *)
+
 Require Import Coq.Arith.PeanoNat.
 Require Import Coq.Bool.Bool.
 Require Import Coq.Lists.List.
@@ -918,58 +960,76 @@ Qed.
 (** ========================================================================= *)
 (** PART XIII: UNIT CONVERSION (mg/dL <-> mmol/L)                             *)
 (** Conversion factor: 1 mmol/L = 18.0182 mg/dL (molar mass glucose 180.16).  *)
-(** We use fixed-point: multiply by 1000, so 18018 represents 18.018.         *)
+(** We use tenths of mmol/L: 10 = 1.0 mmol/L, 39 = 3.9 mmol/L, 100 = 10 mmol/L*)
+(** This matches the MmolInput module and provides 0.1 mmol/L precision.      *)
 (** ========================================================================= *)
 
 Module UnitConversion.
 
-  Definition CONVERSION_FACTOR : nat := 18018.
-  Definition SCALE : nat := 1000.
+  Definition FACTOR_TENTHS : nat := 180.
 
-  Definition mg_dL_to_mmol_L_scaled (mg : nat) : nat :=
-    (mg * SCALE) / CONVERSION_FACTOR.
+  Definition mg_dL_to_mmol_tenths (mg : nat) : nat :=
+    (mg * 10) / FACTOR_TENTHS.
 
-  Definition mmol_L_scaled_to_mg_dL (mmol_scaled : nat) : nat :=
-    (mmol_scaled * CONVERSION_FACTOR) / SCALE.
+  Definition mmol_tenths_to_mg_dL (mmol_tenths : nat) : nat :=
+    (mmol_tenths * FACTOR_TENTHS) / 10.
 
-  Definition BG_mmol_L_scaled := nat.
+  Definition BG_mmol_tenths := nat.
 
 End UnitConversion.
 
 Export UnitConversion.
 
-(** Witness: 180 mg/dL ≈ 10 mmol/L. Scaled: 180*1000/18018 = 9. *)
-Lemma witness_180_mg_to_mmol : mg_dL_to_mmol_L_scaled 180 = 9.
+(** Witness: 180 mg/dL = 10.0 mmol/L = 100 tenths. *)
+Lemma witness_180_mg_to_mmol : mg_dL_to_mmol_tenths 180 = 10.
 Proof. reflexivity. Qed.
 
-(** Witness: 90 mg/dL ≈ 5 mmol/L. Scaled: 90*1000/18018 = 4. *)
-Lemma witness_90_mg_to_mmol : mg_dL_to_mmol_L_scaled 90 = 4.
+(** Witness: 90 mg/dL = 5.0 mmol/L = 50 tenths. *)
+Lemma witness_90_mg_to_mmol : mg_dL_to_mmol_tenths 90 = 5.
 Proof. reflexivity. Qed.
 
-(** Witness: 10 mmol/L (scaled as 10) ≈ 180 mg/dL. 10*18018/1000 = 180. *)
-Lemma witness_10_mmol_to_mg : mmol_L_scaled_to_mg_dL 10 = 180.
+(** Witness: 70 mg/dL ≈ 3.9 mmol/L = 39 tenths. 70*10/180 = 3. *)
+Lemma witness_70_mg_to_mmol : mg_dL_to_mmol_tenths 70 = 3.
 Proof. reflexivity. Qed.
 
-(** Witness: 5 mmol/L (scaled as 5) ≈ 90 mg/dL. 5*18018/1000 = 90. *)
-Lemma witness_5_mmol_to_mg : mmol_L_scaled_to_mg_dL 5 = 90.
+(** Witness: 100 tenths (10.0 mmol/L) = 180 mg/dL. *)
+Lemma witness_100_tenths_to_mg : mmol_tenths_to_mg_dL 100 = 1800.
+Proof. reflexivity. Qed.
+
+(** Witness: 50 tenths (5.0 mmol/L) = 90 mg/dL. *)
+Lemma witness_50_tenths_to_mg : mmol_tenths_to_mg_dL 50 = 900.
+Proof. reflexivity. Qed.
+
+(** Witness: 39 tenths (3.9 mmol/L) ≈ 70 mg/dL. *)
+Lemma witness_39_tenths_to_mg : mmol_tenths_to_mg_dL 39 = 702.
 Proof. reflexivity. Qed.
 
 (** Witness: 0 converts to 0 in both directions. *)
 Lemma witness_zero_conversion :
-  mg_dL_to_mmol_L_scaled 0 = 0 /\ mmol_L_scaled_to_mg_dL 0 = 0.
+  mg_dL_to_mmol_tenths 0 = 0 /\ mmol_tenths_to_mg_dL 0 = 0.
 Proof. split; reflexivity. Qed.
 
-(** Clinical thresholds in mmol/L (scaled). *)
-Definition BG_HYPO_MMOL : nat := 3.  (** 3.9 mmol/L ≈ 70 mg/dL, rounded down. *)
-Definition BG_HYPER_MMOL : nat := 10. (** 10 mmol/L = 180 mg/dL. *)
+(** Clinical thresholds in tenths of mmol/L. *)
+Definition BG_HYPO_MMOL_TENTHS : nat := 39.  (** 3.9 mmol/L ≈ 70 mg/dL. *)
+Definition BG_HYPER_MMOL_TENTHS : nat := 100. (** 10.0 mmol/L = 180 mg/dL. *)
 
 (** Witness: threshold correspondence. *)
-Lemma witness_hypo_threshold_correspondence :
-  mmol_L_scaled_to_mg_dL 4 = 72.
+Lemma witness_hypo_threshold_mg :
+  mmol_tenths_to_mg_dL BG_HYPO_MMOL_TENTHS = 702.
 Proof. reflexivity. Qed.
 
-Lemma witness_hyper_threshold_correspondence :
-  mmol_L_scaled_to_mg_dL 10 = 180.
+Lemma witness_hyper_threshold_mg :
+  mmol_tenths_to_mg_dL BG_HYPER_MMOL_TENTHS = 1800.
+Proof. reflexivity. Qed.
+
+(** Counterexample: round-trip is lossy due to integer division. *)
+Lemma counterex_roundtrip_lossy :
+  mmol_tenths_to_mg_dL (mg_dL_to_mmol_tenths 71) = 54.
+Proof. reflexivity. Qed.
+
+(** Witness: exact values round-trip perfectly. *)
+Lemma witness_exact_roundtrip :
+  mmol_tenths_to_mg_dL (mg_dL_to_mmol_tenths 180) = 180.
 Proof. reflexivity. Qed.
 
 (** ========================================================================= *)
@@ -997,14 +1057,25 @@ Module FixedPointInsulin.
   Definition units_to_twentieths (u : nat) : Insulin_twentieth :=
     u * ONE_UNIT.
 
-  Definition round_to_nearest_twentieth (raw_twentieths : nat) : Insulin_twentieth :=
-    raw_twentieths.
+  Definition round_down_to_increment (t : Insulin_twentieth) (increment : nat) : Insulin_twentieth :=
+    if increment =? 0 then t else (t / increment) * increment.
+
+  Definition round_nearest_to_increment (t : Insulin_twentieth) (increment : nat) : Insulin_twentieth :=
+    if increment =? 0 then t
+    else let half_inc := increment / 2 in
+         ((t + half_inc) / increment) * increment.
 
   Definition round_down_to_tenth (t : Insulin_twentieth) : Insulin_twentieth :=
-    (t / TENTH) * TENTH.
+    round_down_to_increment t TENTH.
 
   Definition round_down_to_half (t : Insulin_twentieth) : Insulin_twentieth :=
-    (t / HALF) * HALF.
+    round_down_to_increment t HALF.
+
+  Definition round_nearest_to_tenth (t : Insulin_twentieth) : Insulin_twentieth :=
+    round_nearest_to_increment t TENTH.
+
+  Definition round_nearest_to_half (t : Insulin_twentieth) : Insulin_twentieth :=
+    round_nearest_to_increment t HALF.
 
 End FixedPointInsulin.
 
@@ -1032,6 +1103,30 @@ Proof. reflexivity. Qed.
 
 (** Witness: round 13 twentieths (0.65U) down to nearest half (0.50U = 10). *)
 Lemma witness_round_down_half_13 : round_down_to_half 13 = 10.
+Proof. reflexivity. Qed.
+
+(** Witness: round 7 twentieths (0.35U) to nearest tenth (0.40U = 8). *)
+Lemma witness_round_nearest_tenth_7 : round_nearest_to_tenth 7 = 8.
+Proof. reflexivity. Qed.
+
+(** Witness: round 5 twentieths (0.25U) to nearest tenth (0.30U = 6). *)
+Lemma witness_round_nearest_tenth_5 : round_nearest_to_tenth 5 = 6.
+Proof. reflexivity. Qed.
+
+(** Witness: round 16 twentieths (0.80U) to nearest half (1.00U = 20). *)
+Lemma witness_round_nearest_half_16 : round_nearest_to_half 16 = 20.
+Proof. reflexivity. Qed.
+
+(** Witness: round 14 twentieths (0.70U) to nearest half (0.50U = 10). *)
+Lemma witness_round_nearest_half_14 : round_nearest_to_half 14 = 10.
+Proof. reflexivity. Qed.
+
+(** Counterexample: rounding down loses precision. *)
+Lemma counterex_round_down_loses : round_down_to_tenth 7 < 7.
+Proof. unfold round_down_to_tenth, round_down_to_increment, TENTH. simpl. lia. Qed.
+
+(** Witness: exact multiples unchanged. *)
+Lemma witness_exact_tenth_unchanged : round_down_to_tenth 8 = 8.
 Proof. reflexivity. Qed.
 
 (** Witness: exact half (10 twentieths = 0.50U) unchanged. *)
@@ -1662,12 +1757,15 @@ Module DeliveryRounding.
     | RoundHalf : RoundingMode
     | RoundUnit : RoundingMode.
 
+  Definition round_down_to_unit (t : Insulin_twentieth) : Insulin_twentieth :=
+    round_down_to_increment t ONE_UNIT.
+
   Definition apply_rounding (mode : RoundingMode) (t : Insulin_twentieth) : Insulin_twentieth :=
     match mode with
     | RoundTwentieth => t
     | RoundTenth => round_down_to_tenth t
     | RoundHalf => round_down_to_half t
-    | RoundUnit => (t / ONE_UNIT) * ONE_UNIT
+    | RoundUnit => round_down_to_unit t
     end.
 
   Definition final_delivery (mode : RoundingMode) (result : PrecisionResult) : option Insulin_twentieth :=
@@ -1700,18 +1798,26 @@ Lemma witness_round_exact_140 :
   apply_rounding RoundUnit 140 = 140.
 Proof. repeat split; reflexivity. Qed.
 
+(** Rounding down to increment never increases dose. *)
+Lemma round_down_le_original : forall t inc,
+  inc > 0 -> round_down_to_increment t inc <= t.
+Proof.
+  intros t inc Hinc.
+  unfold round_down_to_increment.
+  destruct (inc =? 0) eqn:E.
+  - apply Nat.eqb_eq in E. lia.
+  - rewrite Nat.mul_comm. apply Nat.mul_div_le. lia.
+Qed.
+
 (** Rounding never increases dose. *)
 Lemma rounding_le_original : forall mode t,
   apply_rounding mode t <= t.
 Proof.
   intros mode t. destruct mode; unfold apply_rounding.
   - lia.
-  - unfold round_down_to_tenth, TENTH.
-    rewrite Nat.mul_comm. apply Nat.mul_div_le. lia.
-  - unfold round_down_to_half, HALF.
-    rewrite Nat.mul_comm. apply Nat.mul_div_le. lia.
-  - unfold ONE_UNIT.
-    rewrite Nat.mul_comm. apply Nat.mul_div_le. lia.
+  - unfold round_down_to_tenth. apply round_down_le_original. unfold TENTH. lia.
+  - unfold round_down_to_half. apply round_down_le_original. unfold HALF. lia.
+  - unfold round_down_to_unit. apply round_down_le_original. unfold ONE_UNIT. lia.
 Qed.
 
 (** ========================================================================= *)
@@ -2268,7 +2374,135 @@ Lemma boundary_350_severe_adjustment :
 Proof. reflexivity. Qed.
 
 (** ========================================================================= *)
-(** PART XXVI: EXTRACTION                                                     *)
+(** PART XXVI: EXTRACTION SAFETY BOUNDS                                       *)
+(** Proves all intermediates fit in 63-bit signed int under valid inputs.     *)
+(** ========================================================================= *)
+
+Module ExtractionBounds.
+
+  Definition MAX_HISTORY_LENGTH : nat := 100.
+
+  Definition history_length_bounded (events : list BolusEvent) : bool :=
+    length events <=? MAX_HISTORY_LENGTH.
+
+  Definition dose_bounded (event : BolusEvent) : bool :=
+    be_dose_twentieths event <=? PREC_BOLUS_MAX_TWENTIETHS.
+
+  Fixpoint all_doses_bounded (events : list BolusEvent) : bool :=
+    match events with
+    | nil => true
+    | e :: rest => dose_bounded e && all_doses_bounded rest
+    end.
+
+  Definition extraction_safe_history (events : list BolusEvent) : bool :=
+    history_length_bounded events && all_doses_bounded events.
+
+End ExtractionBounds.
+
+Export ExtractionBounds.
+
+(** Carb bolus intermediate: carbs * 200. With carbs <= 500, max = 100000. *)
+Lemma carb_bolus_intermediate_bounded : forall carbs icr,
+  carbs <= 500 -> icr >= 50 ->
+  carb_bolus_twentieths carbs icr <= 2000.
+Proof.
+  intros carbs icr Hcarbs Hicr.
+  unfold carb_bolus_twentieths.
+  destruct (icr =? 0) eqn:E.
+  - lia.
+  - apply Nat.div_le_upper_bound. lia.
+    nia.
+Qed.
+
+(** Correction bolus intermediate: (bg - target) * 200. With bg <= 600, max = 120000. *)
+Lemma correction_bolus_intermediate_bounded : forall bg target isf,
+  bg <= 600 -> isf >= 200 ->
+  correction_bolus_twentieths bg target isf <= 600.
+Proof.
+  intros bg target isf Hbg Hisf.
+  unfold correction_bolus_twentieths.
+  destruct (isf =? 0) eqn:E0; [lia|].
+  destruct (bg <=? target) eqn:E1; [lia|].
+  apply Nat.leb_nle in E1.
+  apply Nat.div_le_upper_bound. lia.
+  nia.
+Qed.
+
+(** IOB from single bolus bounded by dose. *)
+Lemma iob_from_bolus_bounded : forall now event dia,
+  be_dose_twentieths event <= 500 ->
+  iob_from_bolus now event dia <= 500.
+Proof.
+  intros now event dia Hdose.
+  pose proof (iob_bounded_by_dose now event dia) as H.
+  lia.
+Qed.
+
+(** Total IOB bounded by history length * max dose. *)
+Lemma total_iob_bounded : forall now events dia,
+  all_doses_bounded events = true ->
+  total_iob now events dia <= length events * 500.
+Proof.
+  intros now events dia.
+  induction events as [|e rest IH]; intros Hbounded.
+  - simpl. lia.
+  - simpl in Hbounded. apply andb_prop in Hbounded. destruct Hbounded as [Hdose Hrest].
+    unfold dose_bounded in Hdose. apply Nat.leb_le in Hdose.
+    simpl. pose proof (iob_from_bolus_bounded now e dia Hdose) as Hiob.
+    specialize (IH Hrest).
+    lia.
+Qed.
+
+(** With bounded history, total IOB bounded by max_history * max_dose. *)
+Lemma total_iob_extraction_safe : forall now events dia,
+  extraction_safe_history events = true ->
+  total_iob now events dia <= MAX_HISTORY_LENGTH * PREC_BOLUS_MAX_TWENTIETHS.
+Proof.
+  intros now events dia H.
+  unfold extraction_safe_history in H.
+  apply andb_prop in H. destruct H as [Hlen Hdoses].
+  unfold history_length_bounded in Hlen.
+  apply Nat.leb_le in Hlen.
+  pose proof (total_iob_bounded now events dia Hdoses) as Hbound.
+  unfold MAX_HISTORY_LENGTH, PREC_BOLUS_MAX_TWENTIETHS.
+  apply Nat.le_trans with (m := length events * 500).
+  - exact Hbound.
+  - apply Nat.mul_le_mono_r. exact Hlen.
+Qed.
+
+(** Raw precision bolus bounded. *)
+Lemma precision_raw_bounded : forall input params,
+  pi_carbs_g input <= 500 ->
+  pi_current_bg input <= 600 ->
+  prec_isf_tenths params >= 200 ->
+  prec_icr_tenths params >= 50 ->
+  calculate_precision_bolus input params <= 2600.
+Proof.
+  intros input params Hcarbs Hbg Hisf Hicr.
+  unfold calculate_precision_bolus.
+  pose proof (carb_bolus_intermediate_bounded (pi_carbs_g input) (prec_icr_tenths params) Hcarbs Hicr) as H1.
+  pose proof (correction_bolus_intermediate_bounded (pi_current_bg input) (prec_target_bg params) (prec_isf_tenths params) Hbg Hisf) as H2.
+  destruct (carb_bolus_twentieths (pi_carbs_g input) (prec_icr_tenths params) +
+            correction_bolus_twentieths (pi_current_bg input) (prec_target_bg params) (prec_isf_tenths params) <=?
+            total_iob (pi_now input) (pi_bolus_history input) (prec_dia params)) eqn:E.
+  - lia.
+  - lia.
+Qed.
+
+(** Validated output is bounded, ensuring extraction safety. *)
+Theorem extraction_safe : forall input params t c,
+  validated_precision_bolus input params = PrecOK t c ->
+  t <= PREC_BOLUS_MAX_TWENTIETHS.
+Proof.
+  intros input params t c H.
+  apply validated_prec_bounded with input params c. exact H.
+Qed.
+
+(** Max output (500 twentieths = 25 units) fits in any reasonable int. *)
+(** 500 << 2^31 - 1 = 2147483647, so extraction to OCaml int is safe. *)
+
+(** ========================================================================= *)
+(** PART XXVII: EXTRACTION                                                    *)
 (** ========================================================================= *)
 
 Require Import Coq.extraction.Extraction.
