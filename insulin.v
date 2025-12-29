@@ -2876,6 +2876,226 @@ Lemma boundary_350_severe_adjustment :
 Proof. reflexivity. Qed.
 
 (** ========================================================================= *)
+(** PART XXV-B: SENSOR UNCERTAINTY MARGIN                                      *)
+(** CGM sensors have +/- 15-20% error. Conservative bolus accounts for this.  *)
+(** ========================================================================= *)
+
+Module SensorUncertainty.
+
+  Definition SENSOR_ERROR_PERCENT : nat := 15.
+
+  Definition bg_with_margin (bg : BG_mg_dL) (margin_percent : nat) : BG_mg_dL :=
+    bg - (bg * margin_percent) / 100.
+
+  Definition conservative_bg (bg : BG_mg_dL) : BG_mg_dL :=
+    bg_with_margin bg SENSOR_ERROR_PERCENT.
+
+  Definition conservative_correction (current_bg target_bg : BG_mg_dL) (isf : nat) : nat :=
+    let cons_bg := conservative_bg current_bg in
+    correction_bolus cons_bg target_bg isf.
+
+End SensorUncertainty.
+
+Export SensorUncertainty.
+
+(** Witness: 200 mg/dL with 15% margin = 200 - 30 = 170 mg/dL. *)
+Lemma witness_conservative_bg_200 :
+  conservative_bg 200 = 170.
+Proof. reflexivity. Qed.
+
+(** Witness: 100 mg/dL with 15% margin = 100 - 15 = 85 mg/dL. *)
+Lemma witness_conservative_bg_100 :
+  conservative_bg 100 = 85.
+Proof. reflexivity. Qed.
+
+(** Witness: conservative correction at BG 200, target 100, ISF 50.
+    Conservative BG = 170. Correction = (170-100)/50 = 1 (vs 2 without margin). *)
+Lemma witness_conservative_correction :
+  conservative_correction 200 100 50 = 1.
+Proof. reflexivity. Qed.
+
+(** Witness: at BG 150, conservative BG = 127. Correction = (127-100)/50 = 0. *)
+Lemma witness_conservative_near_target :
+  conservative_correction 150 100 50 = 0.
+Proof. reflexivity. Qed.
+
+(** Property: conservative BG is always <= actual BG. *)
+Lemma conservative_bg_le : forall bg,
+  conservative_bg bg <= bg.
+Proof.
+  intro bg. unfold conservative_bg, bg_with_margin, SENSOR_ERROR_PERCENT.
+  assert ((bg * 15) / 100 <= bg) by (apply Nat.div_le_upper_bound; lia).
+  lia.
+Qed.
+
+(** Property: conservative correction is <= regular correction. *)
+Lemma conservative_correction_le : forall bg target isf,
+  isf > 0 ->
+  conservative_correction bg target isf <= correction_bolus bg target isf.
+Proof.
+  intros bg target isf Hisf.
+  unfold conservative_correction.
+  apply correction_monotonic_bg. exact Hisf.
+  apply conservative_bg_le.
+Qed.
+
+(** ========================================================================= *)
+(** PART XXV-C: DAWN PHENOMENON ISF ADJUSTMENT                                 *)
+(** ISF is typically lower in early morning (4-8 AM) due to hormones.         *)
+(** ========================================================================= *)
+
+Module DawnPhenomenon.
+
+  Definition DAWN_START_HOUR : nat := 4.
+  Definition DAWN_END_HOUR : nat := 8.
+  Definition DAWN_ISF_REDUCTION : nat := 80.
+
+  Definition hour_of_day (minutes : Minutes) : nat :=
+    (minutes / 60) mod 24.
+
+  Definition is_dawn_period (minutes : Minutes) : bool :=
+    let h := hour_of_day minutes in
+    (DAWN_START_HOUR <=? h) && (h <? DAWN_END_HOUR).
+
+  Definition dawn_adjusted_isf (minutes : Minutes) (base_isf : nat) : nat :=
+    if is_dawn_period minutes then (base_isf * DAWN_ISF_REDUCTION) / 100
+    else base_isf.
+
+  Definition dawn_adjusted_isf_tenths (minutes : Minutes) (base_isf_tenths : nat) : nat :=
+    if is_dawn_period minutes then (base_isf_tenths * DAWN_ISF_REDUCTION) / 100
+    else base_isf_tenths.
+
+End DawnPhenomenon.
+
+Export DawnPhenomenon.
+
+(** Witness: 300 minutes = 5 hours = 5 AM, which is dawn period. *)
+Lemma witness_5am_is_dawn :
+  is_dawn_period 300 = true.
+Proof. reflexivity. Qed.
+
+(** Witness: 600 minutes = 10 hours = 10 AM, not dawn. *)
+Lemma witness_10am_not_dawn :
+  is_dawn_period 600 = false.
+Proof. reflexivity. Qed.
+
+(** Witness: 180 minutes = 3 hours = 3 AM, not dawn (before 4 AM). *)
+Lemma witness_3am_not_dawn :
+  is_dawn_period 180 = false.
+Proof. reflexivity. Qed.
+
+(** Witness: dawn ISF at 5 AM with base 50 = 50 * 80/100 = 40. *)
+Lemma witness_dawn_isf_5am :
+  dawn_adjusted_isf 300 50 = 40.
+Proof. reflexivity. Qed.
+
+(** Witness: non-dawn ISF unchanged. *)
+Lemma witness_noon_isf_unchanged :
+  dawn_adjusted_isf 720 50 = 50.
+Proof. reflexivity. Qed.
+
+(** Property: dawn ISF is always <= base ISF. *)
+Lemma dawn_isf_le_base : forall minutes base_isf,
+  dawn_adjusted_isf minutes base_isf <= base_isf.
+Proof.
+  intros minutes base_isf.
+  unfold dawn_adjusted_isf, DAWN_ISF_REDUCTION.
+  destruct (is_dawn_period minutes).
+  - apply Nat.div_le_upper_bound. lia.
+    assert (base_isf * 80 <= base_isf * 100) by lia. lia.
+  - lia.
+Qed.
+
+(** ========================================================================= *)
+(** PART XXV-D: EXERCISE/ILLNESS/STRESS MODIFIERS                              *)
+(** Activity state affects insulin sensitivity.                               *)
+(** ========================================================================= *)
+
+Module ActivityModifiers.
+
+  Inductive ActivityState : Type :=
+    | Activity_Normal : ActivityState
+    | Activity_LightExercise : ActivityState
+    | Activity_ModerateExercise : ActivityState
+    | Activity_IntenseExercise : ActivityState
+    | Activity_Illness : ActivityState
+    | Activity_Stress : ActivityState.
+
+  Definition icr_modifier (state : ActivityState) : nat :=
+    match state with
+    | Activity_Normal => 100
+    | Activity_LightExercise => 120
+    | Activity_ModerateExercise => 150
+    | Activity_IntenseExercise => 200
+    | Activity_Illness => 80
+    | Activity_Stress => 80
+    end.
+
+  Definition isf_modifier (state : ActivityState) : nat :=
+    match state with
+    | Activity_Normal => 100
+    | Activity_LightExercise => 120
+    | Activity_ModerateExercise => 150
+    | Activity_IntenseExercise => 200
+    | Activity_Illness => 70
+    | Activity_Stress => 70
+    end.
+
+  Definition apply_icr_modifier (base_icr : nat) (state : ActivityState) : nat :=
+    (base_icr * icr_modifier state) / 100.
+
+  Definition apply_isf_modifier (base_isf : nat) (state : ActivityState) : nat :=
+    (base_isf * isf_modifier state) / 100.
+
+End ActivityModifiers.
+
+Export ActivityModifiers.
+
+(** Witness: normal state leaves ICR unchanged. *)
+Lemma witness_normal_icr :
+  apply_icr_modifier 10 Activity_Normal = 10.
+Proof. reflexivity. Qed.
+
+(** Witness: moderate exercise increases ICR by 50% (10 -> 15). *)
+Lemma witness_exercise_icr :
+  apply_icr_modifier 10 Activity_ModerateExercise = 15.
+Proof. reflexivity. Qed.
+
+(** Witness: illness decreases ICR by 20% (10 -> 8). *)
+Lemma witness_illness_icr :
+  apply_icr_modifier 10 Activity_Illness = 8.
+Proof. reflexivity. Qed.
+
+(** Witness: intense exercise doubles ISF (50 -> 100). *)
+Lemma witness_intense_isf :
+  apply_isf_modifier 50 Activity_IntenseExercise = 100.
+Proof. reflexivity. Qed.
+
+(** Witness: stress decreases ISF by 30% (50 -> 35). *)
+Lemma witness_stress_isf :
+  apply_isf_modifier 50 Activity_Stress = 35.
+Proof. reflexivity. Qed.
+
+(** Property: exercise increases effective ICR (less insulin per carb). *)
+Lemma exercise_increases_icr : forall base_icr,
+  base_icr > 0 ->
+  apply_icr_modifier base_icr Activity_ModerateExercise >= base_icr.
+Proof.
+  intros base_icr Hpos.
+  unfold apply_icr_modifier, icr_modifier.
+  apply Nat.div_le_lower_bound. lia. nia.
+Qed.
+
+(** Property: illness decreases effective ISF (more insulin needed). *)
+Lemma illness_decreases_isf : forall base_isf,
+  apply_isf_modifier base_isf Activity_Illness <= base_isf.
+Proof.
+  intro base_isf.
+  unfold apply_isf_modifier, isf_modifier.
+  apply Nat.div_le_upper_bound. lia. nia.
+Qed.
+
+(** ========================================================================= *)
 (** PART XXVI: EXTRACTION SAFETY BOUNDS                                       *)
 (** Proves all intermediates fit in 63-bit signed int under valid inputs.     *)
 (** ========================================================================= *)
