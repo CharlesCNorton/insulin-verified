@@ -21,41 +21,35 @@
     REMAINING WORK
     =========================================================================
 
-    1.  Integrate bilinear IOB into validated calculator.
-        Add DIA model selector so validated_precision_bolus can use bilinear decay.
+    1.  Integrate stacking guard into validated path.
+        Warn when bolus requested within 30 min of previous bolus.
 
-    2.  Integrate nonlinear ISF into validated calculator.
-        Wire adjusted_isf into precision correction path with a toggle.
-
-    3.  Integrate pediatric limits into validated calculator.
-        Add weight-based cap enforcement when pediatric flag is set.
-
-    4.  Add reverse correction.
-        When BG < target, reduce carb bolus by (target - BG) / ISF units.
-
-    5.  Add 24-hour TDD accumulator.
-        Track cumulative daily insulin; warn or block when approaching limit.
-
-    6.  Clarify hypoglycemia theorem scope.
-        Rename correction_never_causes_hypoglycemia to correction_arithmetic_safe.
-
-    7.  Model sensor uncertainty.
-        Add optional +/-15% BG error margin; compute conservative bolus.
-
-    8.  Add time-of-day ISF adjustment.
-        Model dawn phenomenon with morning ISF multiplier.
-
-    9.  Add exercise/illness/stress modifiers.
-        Parameterize ICR/ISF adjustment factors for activity state.
-
-    10. Model carb absorption profiles.
-        Add glycemic index or fat/protein delay factor to carb bolus timing.
-
-    11. Add suspend-before-low logic.
+    2.  Integrate suspend-before-low logic.
         When predicted BG approaches hypo threshold, reduce or withhold dose.
 
-    12. Model delivery fault detection.
+    3.  Integrate delivery fault detection.
         Add occlusion/fault flag forcing IOB to assume worst-case delivery.
+
+    4.  Create validated_pediatric_bolus function.
+        Add weight-based cap enforcement when pediatric flag is set.
+
+    5.  Fix predicted_bg_after_correction to use insulin action time.
+        Current version ignores DIA in prediction.
+
+    6.  Add carb absorption model.
+        Add glycemic index or fat/protein delay factor to carb bolus timing.
+
+    7.  Fix integer truncation bias.
+        Audit all divisions for rounding direction; ensure conservative.
+
+    8.  Add traceability matrix.
+        Map each safety requirement to its proving lemma.
+
+    9.  Enforce extraction safety assumptions in validated path.
+        Add bounds checks ensuring OCaml int63 overflow impossible.
+
+    10. Add round-trip property for OCaml extraction.
+        Prove extracted code agrees with Coq definitions.
 
     ========================================================================= *)
 
@@ -1660,6 +1654,17 @@ Definition correction_twentieths_full (minutes : Minutes) (current_bg target_bg 
     let eff_isf := adjusted_isf_tenths current_bg dawn_isf in
     if eff_isf =? 0 then 0
     else ((current_bg - target_bg) * 200) / eff_isf.
+
+Definition sum_bolus_history (history : list BolusEvent) : Insulin_twentieth :=
+  fold_left (fun acc e => acc + be_dose_twentieths e) history 0.
+
+Definition tdd_from_history (history : list BolusEvent) (now : Minutes) : Insulin_twentieth :=
+  let day_start := (now / 1440) * 1440 in
+  let today_boluses := filter (fun e => day_start <=? be_time_minutes e) history in
+  sum_bolus_history today_boluses.
+
+Lemma sum_bolus_nil : sum_bolus_history [] = 0.
+Proof. reflexivity. Qed.
 
 Definition CGM_MARGIN_PERCENT : nat := 15.
 
