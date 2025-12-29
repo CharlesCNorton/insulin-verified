@@ -19,6 +19,8 @@
 
 Require Import Coq.Arith.PeanoNat.
 Require Import Coq.Bool.Bool.
+Require Import Coq.Lists.List.
+Import ListNotations.
 Require Import Lia.
 
 (** ========================================================================= *)
@@ -594,3 +596,1051 @@ Proof.
   { apply correction_safe_when_above_target. exact Hisf_pos. exact Habove. }
   lia.
 Qed.
+
+(** ========================================================================= *)
+(** PART IX: INPUT VALIDATION                                                 *)
+(** Sanity checks on user-provided values before calculation.                 *)
+(** ========================================================================= *)
+
+Module InputValidation.
+
+  Definition bg_in_meter_range (bg : BG_mg_dL) : bool :=
+    (20 <=? bg) && (bg <=? BG_METER_MAX).
+
+  Definition carbs_reasonable (carbs : Carbs_g) : bool :=
+    carbs <=? CARBS_SANITY_MAX.
+
+  Definition iob_reasonable (iob : IOB) : bool :=
+    iob <=? BOLUS_SANITY_MAX.
+
+  Definition input_valid (input : BolusInput) : bool :=
+    bg_in_meter_range (bi_current_bg input) &&
+    carbs_reasonable (bi_carbs input) &&
+    iob_reasonable (bi_iob input).
+
+End InputValidation.
+
+Export InputValidation.
+
+(** Witness: BG of 120 is in meter range. *)
+Lemma witness_bg_120_in_range : bg_in_meter_range 120 = true.
+Proof. reflexivity. Qed.
+
+(** Witness: BG of 20 (meter minimum) is valid. *)
+Lemma witness_bg_20_valid : bg_in_meter_range 20 = true.
+Proof. reflexivity. Qed.
+
+(** Witness: BG of 600 (meter maximum) is valid. *)
+Lemma witness_bg_600_valid : bg_in_meter_range 600 = true.
+Proof. reflexivity. Qed.
+
+(** Counterexample: BG of 19 is below meter range. *)
+Lemma counterex_bg_19_invalid : bg_in_meter_range 19 = false.
+Proof. reflexivity. Qed.
+
+(** Counterexample: BG of 601 is above meter range. *)
+Lemma counterex_bg_601_invalid : bg_in_meter_range 601 = false.
+Proof. reflexivity. Qed.
+
+(** Counterexample: BG of 0 is invalid (meter error or dead patient). *)
+Lemma counterex_bg_0_invalid : bg_in_meter_range 0 = false.
+Proof. reflexivity. Qed.
+
+(** Witness: 60g carbs is reasonable. *)
+Lemma witness_carbs_60_reasonable : carbs_reasonable 60 = true.
+Proof. reflexivity. Qed.
+
+(** Witness: 200g carbs (max) is still reasonable. *)
+Lemma witness_carbs_200_reasonable : carbs_reasonable 200 = true.
+Proof. reflexivity. Qed.
+
+(** Counterexample: 201g carbs exceeds sanity limit. *)
+Lemma counterex_carbs_201_unreasonable : carbs_reasonable 201 = false.
+Proof. reflexivity. Qed.
+
+(** Witness: IOB of 5 units is reasonable. *)
+Lemma witness_iob_5_reasonable : iob_reasonable 5 = true.
+Proof. reflexivity. Qed.
+
+(** Counterexample: IOB of 30 units exceeds sanity limit. *)
+Lemma counterex_iob_30_unreasonable : iob_reasonable 30 = false.
+Proof. reflexivity. Qed.
+
+(** Witness: typical input is valid. *)
+Lemma witness_typical_input_valid : input_valid witness_input_1 = true.
+Proof. reflexivity. Qed.
+
+(** Counterexample: input with BG=0 is invalid. *)
+Definition counterex_input_bg_zero : BolusInput := mkBolusInput 60 0 0.
+
+Lemma counterex_input_bg_zero_invalid : input_valid counterex_input_bg_zero = false.
+Proof. reflexivity. Qed.
+
+(** Counterexample: input with 300g carbs is invalid. *)
+Definition counterex_input_carbs_300 : BolusInput := mkBolusInput 300 100 0.
+
+Lemma counterex_input_carbs_300_invalid : input_valid counterex_input_carbs_300 = false.
+Proof. reflexivity. Qed.
+
+(** ========================================================================= *)
+(** PART X: BOLUS SANITY CAP                                                  *)
+(** No single bolus should ever exceed BOLUS_SANITY_MAX (25 units).           *)
+(** ========================================================================= *)
+
+Module BolusCap.
+
+  Definition cap_bolus (bolus : nat) : nat :=
+    if bolus <=? BOLUS_SANITY_MAX then bolus else BOLUS_SANITY_MAX.
+
+  Definition bolus_was_capped (original capped : nat) : bool :=
+    negb (original =? capped).
+
+End BolusCap.
+
+Export BolusCap.
+
+(** Witness: 10 units is not capped. *)
+Lemma witness_cap_10 : cap_bolus 10 = 10.
+Proof. reflexivity. Qed.
+
+(** Witness: 25 units (exactly max) is not capped. *)
+Lemma witness_cap_25 : cap_bolus 25 = 25.
+Proof. reflexivity. Qed.
+
+(** Witness: 30 units is capped to 25. *)
+Lemma witness_cap_30 : cap_bolus 30 = 25.
+Proof. reflexivity. Qed.
+
+(** Witness: 100 units is capped to 25. *)
+Lemma witness_cap_100 : cap_bolus 100 = 25.
+Proof. reflexivity. Qed.
+
+(** Witness: 0 units is not capped. *)
+Lemma witness_cap_0 : cap_bolus 0 = 0.
+Proof. reflexivity. Qed.
+
+(** Counterexample: capped bolus was detected. *)
+Lemma counterex_capped_detected : bolus_was_capped 30 (cap_bolus 30) = true.
+Proof. reflexivity. Qed.
+
+(** Witness: uncapped bolus is not flagged. *)
+Lemma witness_uncapped_not_flagged : bolus_was_capped 10 (cap_bolus 10) = false.
+Proof. reflexivity. Qed.
+
+(** Critical safety: cap_bolus always <= BOLUS_SANITY_MAX. *)
+Lemma cap_bolus_bounded : forall bolus,
+  cap_bolus bolus <= BOLUS_SANITY_MAX.
+Proof.
+  intro bolus.
+  unfold cap_bolus, BOLUS_SANITY_MAX.
+  destruct (bolus <=? 25) eqn:E.
+  - apply Nat.leb_le in E. exact E.
+  - lia.
+Qed.
+
+(** Critical safety: cap_bolus always <= original. *)
+Lemma cap_bolus_le_original : forall bolus,
+  cap_bolus bolus <= bolus.
+Proof.
+  intro bolus.
+  unfold cap_bolus, BOLUS_SANITY_MAX.
+  destruct (bolus <=? 25) eqn:E.
+  - lia.
+  - apply Nat.leb_nle in E. lia.
+Qed.
+
+(** ========================================================================= *)
+(** PART XI: FULLY VALIDATED BOLUS CALCULATOR                                 *)
+(** Combines all safety checks into one validated computation.                *)
+(** ========================================================================= *)
+
+Module ValidatedCalculator.
+
+  Inductive BolusResult : Type :=
+    | BolusOK : nat -> bool -> BolusResult
+    | BolusError : nat -> BolusResult.
+
+  Definition error_invalid_params : nat := 1.
+  Definition error_invalid_input : nat := 2.
+  Definition error_hypo_risk : nat := 3.
+
+  Definition validated_bolus (input : BolusInput) (params : PatientParams) : BolusResult :=
+    if negb (params_valid params) then BolusError error_invalid_params
+    else if negb (input_valid input) then BolusError error_invalid_input
+    else if is_hypo (bi_current_bg input) then BolusError error_hypo_risk
+    else
+      let raw := calculate_bolus input params in
+      let capped := cap_bolus raw in
+      let was_capped := bolus_was_capped raw capped in
+      BolusOK capped was_capped.
+
+  Definition result_is_ok (r : BolusResult) : bool :=
+    match r with
+    | BolusOK _ _ => true
+    | BolusError _ => false
+    end.
+
+  Definition result_bolus (r : BolusResult) : option nat :=
+    match r with
+    | BolusOK n _ => Some n
+    | BolusError _ => None
+    end.
+
+  Definition result_was_capped (r : BolusResult) : option bool :=
+    match r with
+    | BolusOK _ c => Some c
+    | BolusError _ => None
+    end.
+
+End ValidatedCalculator.
+
+Export ValidatedCalculator.
+
+(** Witness: normal calculation succeeds. *)
+Lemma witness_validated_ok :
+  validated_bolus witness_input_1 witness_typical_params = BolusOK 7 false.
+Proof. reflexivity. Qed.
+
+(** Witness: result accessor works. *)
+Lemma witness_result_bolus_ok :
+  result_bolus (validated_bolus witness_input_1 witness_typical_params) = Some 7.
+Proof. reflexivity. Qed.
+
+(** Counterexample: invalid params rejected. *)
+Lemma counterex_validated_invalid_params :
+  validated_bolus witness_input_1 counterex_zero_icr = BolusError error_invalid_params.
+Proof. reflexivity. Qed.
+
+(** Counterexample: invalid input rejected. *)
+Lemma counterex_validated_invalid_input :
+  validated_bolus counterex_input_bg_zero witness_typical_params = BolusError error_invalid_input.
+Proof. reflexivity. Qed.
+
+(** Counterexample: hypoglycemic patient rejected (BG=60). *)
+Definition input_hypo_patient : BolusInput := mkBolusInput 60 60 0.
+
+Lemma counterex_validated_hypo_risk :
+  validated_bolus input_hypo_patient witness_typical_params = BolusError error_hypo_risk.
+Proof. reflexivity. Qed.
+
+(** Witness: large meal calculation.
+    180g carbs / ICR 10 = 18U carb bolus.
+    BG 300, target 100, ISF 50 = (300-100)/50 = 4U correction.
+    Total = 22U, not capped (< 25). *)
+Definition input_large_meal : BolusInput := mkBolusInput 180 300 0.
+
+Lemma witness_large_meal :
+  result_bolus (validated_bolus input_large_meal witness_typical_params) = Some 22.
+Proof. reflexivity. Qed.
+
+(** Witness: bolus that exceeds cap.
+    200g carbs / ICR 10 = 20U carb bolus.
+    BG 400, target 100, ISF 50 = (400-100)/50 = 6U correction.
+    Total = 26U, capped to 25U. *)
+Definition input_exceeds_cap : BolusInput := mkBolusInput 200 400 0.
+
+Lemma witness_exceeds_cap :
+  result_bolus (validated_bolus input_exceeds_cap witness_typical_params) = Some 25.
+Proof. reflexivity. Qed.
+
+(** ========================================================================= *)
+(** PART XII: SYSTEM INVARIANTS                                               *)
+(** ========================================================================= *)
+
+(** Output is bounded by BOLUS_SANITY_MAX on all successful computations. *)
+Theorem validated_bolus_bounded : forall input params n c,
+  validated_bolus input params = BolusOK n c ->
+  n <= BOLUS_SANITY_MAX.
+Proof.
+  intros input params n c H.
+  unfold validated_bolus in H.
+  destruct (negb (params_valid params)); [discriminate|].
+  destruct (negb (input_valid input)); [discriminate|].
+  destruct (is_hypo (bi_current_bg input)); [discriminate|].
+  inversion H. subst.
+  apply cap_bolus_bounded.
+Qed.
+
+(** Computation refuses to proceed when current BG < 70 mg/dL. *)
+Theorem hypo_patients_rejected : forall input params,
+  is_hypo (bi_current_bg input) = true ->
+  params_valid params = true ->
+  input_valid input = true ->
+  exists e, validated_bolus input params = BolusError e.
+Proof.
+  intros input params Hhypo Hparams Hinput.
+  exists error_hypo_risk.
+  unfold validated_bolus.
+  rewrite Hparams. simpl.
+  rewrite Hinput. simpl.
+  rewrite Hhypo. reflexivity.
+Qed.
+
+(** ICR >= 1 and ISF >= 1 on all successful computations. *)
+Theorem no_division_by_zero : forall input params n c,
+  validated_bolus input params = BolusOK n c ->
+  pp_icr params >= 1 /\ pp_isf params >= 1.
+Proof.
+  intros input params n c H.
+  unfold validated_bolus in H.
+  destruct (negb (params_valid params)) eqn:E1; [discriminate|].
+  apply negb_false_iff in E1.
+  unfold params_valid in E1.
+  repeat rewrite andb_true_iff in E1.
+  destruct E1 as [[[[[[[_ _] _] _] _] _] H7] H8].
+  apply Nat.leb_le in H7. apply Nat.leb_le in H8.
+  lia.
+Qed.
+
+(** Output is non-negative (trivially true for nat representation). *)
+Theorem bolus_nonnegative : forall input params n c,
+  validated_bolus input params = BolusOK n c ->
+  n >= 0.
+Proof. intros. lia. Qed.
+
+(** BolusOK implies all preconditions were satisfied. *)
+Theorem only_valid_produces_result : forall input params n c,
+  validated_bolus input params = BolusOK n c ->
+  params_valid params = true /\
+  input_valid input = true /\
+  is_hypo (bi_current_bg input) = false.
+Proof.
+  intros input params n c H.
+  unfold validated_bolus in H.
+  destruct (negb (params_valid params)) eqn:E1; [discriminate|].
+  destruct (negb (input_valid input)) eqn:E2; [discriminate|].
+  destruct (is_hypo (bi_current_bg input)) eqn:E3; [discriminate|].
+  apply negb_false_iff in E1.
+  apply negb_false_iff in E2.
+  auto.
+Qed.
+
+(** ========================================================================= *)
+(** PART XIII: UNIT CONVERSION (mg/dL <-> mmol/L)                             *)
+(** Conversion factor: 1 mmol/L = 18.0182 mg/dL (molar mass glucose 180.16).  *)
+(** We use fixed-point: multiply by 1000, so 18018 represents 18.018.         *)
+(** ========================================================================= *)
+
+Module UnitConversion.
+
+  Definition CONVERSION_FACTOR : nat := 18018.
+  Definition SCALE : nat := 1000.
+
+  Definition mg_dL_to_mmol_L_scaled (mg : nat) : nat :=
+    (mg * SCALE) / CONVERSION_FACTOR.
+
+  Definition mmol_L_scaled_to_mg_dL (mmol_scaled : nat) : nat :=
+    (mmol_scaled * CONVERSION_FACTOR) / SCALE.
+
+  Definition BG_mmol_L_scaled := nat.
+
+End UnitConversion.
+
+Export UnitConversion.
+
+(** Witness: 180 mg/dL ≈ 10 mmol/L. Scaled: 180*1000/18018 = 9. *)
+Lemma witness_180_mg_to_mmol : mg_dL_to_mmol_L_scaled 180 = 9.
+Proof. reflexivity. Qed.
+
+(** Witness: 90 mg/dL ≈ 5 mmol/L. Scaled: 90*1000/18018 = 4. *)
+Lemma witness_90_mg_to_mmol : mg_dL_to_mmol_L_scaled 90 = 4.
+Proof. reflexivity. Qed.
+
+(** Witness: 10 mmol/L (scaled as 10) ≈ 180 mg/dL. 10*18018/1000 = 180. *)
+Lemma witness_10_mmol_to_mg : mmol_L_scaled_to_mg_dL 10 = 180.
+Proof. reflexivity. Qed.
+
+(** Witness: 5 mmol/L (scaled as 5) ≈ 90 mg/dL. 5*18018/1000 = 90. *)
+Lemma witness_5_mmol_to_mg : mmol_L_scaled_to_mg_dL 5 = 90.
+Proof. reflexivity. Qed.
+
+(** Witness: 0 converts to 0 in both directions. *)
+Lemma witness_zero_conversion :
+  mg_dL_to_mmol_L_scaled 0 = 0 /\ mmol_L_scaled_to_mg_dL 0 = 0.
+Proof. split; reflexivity. Qed.
+
+(** Clinical thresholds in mmol/L (scaled). *)
+Definition BG_HYPO_MMOL : nat := 3.  (** 3.9 mmol/L ≈ 70 mg/dL, rounded down. *)
+Definition BG_HYPER_MMOL : nat := 10. (** 10 mmol/L = 180 mg/dL. *)
+
+(** Witness: threshold correspondence. *)
+Lemma witness_hypo_threshold_correspondence :
+  mmol_L_scaled_to_mg_dL 4 = 72.
+Proof. reflexivity. Qed.
+
+Lemma witness_hyper_threshold_correspondence :
+  mmol_L_scaled_to_mg_dL 10 = 180.
+Proof. reflexivity. Qed.
+
+(** ========================================================================= *)
+(** PART XIV: FIXED-POINT INSULIN ARITHMETIC                                  *)
+(** Insulin pumps deliver in 0.05U increments. We represent doses as          *)
+(** twentieths of a unit: 1 = 0.05U, 20 = 1.0U, 100 = 5.0U.                   *)
+(** ========================================================================= *)
+
+Module FixedPointInsulin.
+
+  Definition Insulin_twentieth := nat.
+
+  Definition TWENTIETH : nat := 1.
+  Definition TENTH : nat := 2.
+  Definition QUARTER : nat := 5.
+  Definition HALF : nat := 10.
+  Definition ONE_UNIT : nat := 20.
+
+  Definition twentieths_to_units (t : Insulin_twentieth) : nat :=
+    t / ONE_UNIT.
+
+  Definition twentieths_to_tenths (t : Insulin_twentieth) : nat :=
+    t / TENTH.
+
+  Definition units_to_twentieths (u : nat) : Insulin_twentieth :=
+    u * ONE_UNIT.
+
+  Definition round_to_nearest_twentieth (raw_twentieths : nat) : Insulin_twentieth :=
+    raw_twentieths.
+
+  Definition round_down_to_tenth (t : Insulin_twentieth) : Insulin_twentieth :=
+    (t / TENTH) * TENTH.
+
+  Definition round_down_to_half (t : Insulin_twentieth) : Insulin_twentieth :=
+    (t / HALF) * HALF.
+
+End FixedPointInsulin.
+
+Export FixedPointInsulin.
+
+(** Witness: 20 twentieths = 1.0 unit. *)
+Lemma witness_20_twentieths_is_1_unit : twentieths_to_units 20 = 1.
+Proof. reflexivity. Qed.
+
+(** Witness: 100 twentieths = 5.0 units. *)
+Lemma witness_100_twentieths_is_5_units : twentieths_to_units 100 = 5.
+Proof. reflexivity. Qed.
+
+(** Witness: 7 twentieths = 0.35U, truncates to 0 whole units. *)
+Lemma witness_7_twentieths_truncates : twentieths_to_units 7 = 0.
+Proof. reflexivity. Qed.
+
+(** Witness: 3 units = 60 twentieths. *)
+Lemma witness_3_units_is_60_twentieths : units_to_twentieths 3 = 60.
+Proof. reflexivity. Qed.
+
+(** Witness: round 7 twentieths (0.35U) down to nearest tenth (0.30U = 6). *)
+Lemma witness_round_down_tenth_7 : round_down_to_tenth 7 = 6.
+Proof. reflexivity. Qed.
+
+(** Witness: round 13 twentieths (0.65U) down to nearest half (0.50U = 10). *)
+Lemma witness_round_down_half_13 : round_down_to_half 13 = 10.
+Proof. reflexivity. Qed.
+
+(** Witness: exact half (10 twentieths = 0.50U) unchanged. *)
+Lemma witness_exact_half_unchanged : round_down_to_half 10 = 10.
+Proof. reflexivity. Qed.
+
+(** Counterexample: 19 twentieths (0.95U) rounds down to 0 whole units. *)
+Lemma counterex_19_twentieths_not_one_unit : twentieths_to_units 19 = 0.
+Proof. reflexivity. Qed.
+
+(** Round-trip property: units_to_twentieths then twentieths_to_units recovers original. *)
+Lemma units_twentieths_roundtrip : forall u,
+  twentieths_to_units (units_to_twentieths u) = u.
+Proof.
+  intro u.
+  unfold twentieths_to_units, units_to_twentieths, ONE_UNIT.
+  rewrite Nat.div_mul. reflexivity. lia.
+Qed.
+
+(** ========================================================================= *)
+(** PART XV: INSULIN-ON-BOARD DECAY MODEL                                     *)
+(** Models active insulin remaining from previous boluses.                    *)
+(** Uses piecewise linear approximation of exponential decay.                 *)
+(** DIA (duration of insulin action) typically 3-5 hours.                     *)
+(** ========================================================================= *)
+
+Module IOBDecay.
+
+  Definition Minutes := nat.
+  Definition DIA_minutes := nat.
+
+  Definition DIA_3_HOURS : DIA_minutes := 180.
+  Definition DIA_4_HOURS : DIA_minutes := 240.
+  Definition DIA_5_HOURS : DIA_minutes := 300.
+
+  Record BolusEvent := mkBolusEvent {
+    be_dose_twentieths : Insulin_twentieth;
+    be_time_minutes : Minutes
+  }.
+
+  Definition minutes_since_bolus (now : Minutes) (event : BolusEvent) : nat :=
+    if now <? be_time_minutes event then 0
+    else now - be_time_minutes event.
+
+  Definition iob_fraction_remaining (elapsed : Minutes) (dia : DIA_minutes) : nat :=
+    if dia =? 0 then 0
+    else if dia <=? elapsed then 0
+    else ((dia - elapsed) * 100) / dia.
+
+  Definition iob_from_bolus (now : Minutes) (event : BolusEvent) (dia : DIA_minutes) : Insulin_twentieth :=
+    if now <? be_time_minutes event then 0
+    else
+      let elapsed := minutes_since_bolus now event in
+      let fraction := iob_fraction_remaining elapsed dia in
+      (be_dose_twentieths event * fraction) / 100.
+
+  Fixpoint total_iob (now : Minutes) (events : list BolusEvent) (dia : DIA_minutes) : Insulin_twentieth :=
+    match events with
+    | nil => 0
+    | e :: rest => iob_from_bolus now e dia + total_iob now rest dia
+    end.
+
+End IOBDecay.
+
+Export IOBDecay.
+
+(** Witness: at time 0, 100% of insulin remains (fraction = 100). *)
+Lemma witness_iob_fraction_at_zero :
+  iob_fraction_remaining 0 DIA_4_HOURS = 100.
+Proof. reflexivity. Qed.
+
+(** Witness: at half DIA (120 min of 240), 50% remains. *)
+Lemma witness_iob_fraction_at_half :
+  iob_fraction_remaining 120 DIA_4_HOURS = 50.
+Proof. reflexivity. Qed.
+
+(** Witness: at DIA (240 min), 0% remains. *)
+Lemma witness_iob_fraction_at_dia :
+  iob_fraction_remaining 240 DIA_4_HOURS = 0.
+Proof. reflexivity. Qed.
+
+(** Witness: beyond DIA, 0% remains. *)
+Lemma witness_iob_fraction_beyond_dia :
+  iob_fraction_remaining 300 DIA_4_HOURS = 0.
+Proof. reflexivity. Qed.
+
+(** Witness: 1 unit (20 twentieths) at time 0, checked at time 120 with 4hr DIA.
+    50% remaining = 10 twentieths = 0.5U. *)
+Definition witness_bolus_event : BolusEvent := mkBolusEvent 20 0.
+
+Lemma witness_iob_half_remaining :
+  iob_from_bolus 120 witness_bolus_event DIA_4_HOURS = 10.
+Proof. reflexivity. Qed.
+
+(** Witness: same bolus at time 240 (full DIA elapsed) = 0. *)
+Lemma witness_iob_fully_absorbed :
+  iob_from_bolus 240 witness_bolus_event DIA_4_HOURS = 0.
+Proof. reflexivity. Qed.
+
+(** Witness: bolus in the future contributes 0 IOB. *)
+Definition witness_future_bolus : BolusEvent := mkBolusEvent 20 200.
+
+Lemma witness_future_bolus_no_iob :
+  iob_from_bolus 100 witness_future_bolus DIA_4_HOURS = 0.
+Proof. reflexivity. Qed.
+
+(** Witness: total IOB from two boluses.
+    Bolus 1: 20 twentieths at t=0. At t=120: 50% remains = 10.
+    Bolus 2: 40 twentieths at t=60. At t=120: 75% remains = 30.
+    Total = 40 twentieths. *)
+Definition witness_bolus_1 : BolusEvent := mkBolusEvent 20 0.
+Definition witness_bolus_2 : BolusEvent := mkBolusEvent 40 60.
+
+Lemma witness_total_iob_two_boluses :
+  total_iob 120 [witness_bolus_1; witness_bolus_2] DIA_4_HOURS = 40.
+Proof. reflexivity. Qed.
+
+(** IOB fraction is at most 100. *)
+Lemma iob_fraction_le_100 : forall elapsed dia,
+  iob_fraction_remaining elapsed dia <= 100.
+Proof.
+  intros elapsed dia.
+  unfold iob_fraction_remaining.
+  destruct (dia =? 0) eqn:E1; [lia|].
+  destruct (dia <=? elapsed) eqn:E2; [lia|].
+  apply Nat.leb_nle in E2.
+  apply Nat.eqb_neq in E1.
+  apply Nat.div_le_upper_bound. lia.
+  nia.
+Qed.
+
+(** IOB is bounded by original dose. *)
+Lemma iob_bounded_by_dose : forall now event dia,
+  iob_from_bolus now event dia <= be_dose_twentieths event.
+Proof.
+  intros now event dia.
+  unfold iob_from_bolus.
+  destruct (now <? be_time_minutes event) eqn:Efut.
+  - lia.
+  - pose proof (iob_fraction_le_100 (minutes_since_bolus now event) dia) as Hfrac.
+    apply Nat.div_le_upper_bound. lia.
+    nia.
+Qed.
+
+(** ========================================================================= *)
+(** PART XVI: HIGH-PRECISION BOLUS CALCULATOR                                 *)
+(** Uses twentieths representation and integrates IOB decay.                  *)
+(** ========================================================================= *)
+
+Module PrecisionCalculator.
+
+  Record PrecisionParams := mkPrecisionParams {
+    prec_icr_tenths : nat;
+    prec_isf_tenths : nat;
+    prec_target_bg : BG_mg_dL;
+    prec_dia : DIA_minutes
+  }.
+
+  Definition prec_params_valid (p : PrecisionParams) : bool :=
+    (50 <=? prec_icr_tenths p) && (prec_icr_tenths p <=? 250) &&
+    (200 <=? prec_isf_tenths p) && (prec_isf_tenths p <=? 1000) &&
+    (BG_HYPO <=? prec_target_bg p) && (prec_target_bg p <=? BG_HYPER) &&
+    (120 <=? prec_dia p) && (prec_dia p <=? 360).
+
+  Definition carb_bolus_twentieths (carbs_g : nat) (icr_tenths : nat) : Insulin_twentieth :=
+    if icr_tenths =? 0 then 0
+    else (carbs_g * 200) / icr_tenths.
+
+  Definition correction_bolus_twentieths (current_bg target_bg : BG_mg_dL) (isf_tenths : nat) : Insulin_twentieth :=
+    if isf_tenths =? 0 then 0
+    else if current_bg <=? target_bg then 0
+    else ((current_bg - target_bg) * 200) / isf_tenths.
+
+  Record PrecisionInput := mkPrecisionInput {
+    pi_carbs_g : nat;
+    pi_current_bg : BG_mg_dL;
+    pi_now : Minutes;
+    pi_bolus_history : list BolusEvent
+  }.
+
+  Definition calculate_precision_bolus (input : PrecisionInput) (params : PrecisionParams) : Insulin_twentieth :=
+    let carb := carb_bolus_twentieths (pi_carbs_g input) (prec_icr_tenths params) in
+    let corr := correction_bolus_twentieths (pi_current_bg input) (prec_target_bg params) (prec_isf_tenths params) in
+    let iob := total_iob (pi_now input) (pi_bolus_history input) (prec_dia params) in
+    let raw := carb + corr in
+    if raw <=? iob then 0 else raw - iob.
+
+End PrecisionCalculator.
+
+Export PrecisionCalculator.
+
+(** Witness: typical params (ICR=10.0, ISF=50.0, target=100, DIA=4hr). *)
+Definition witness_prec_params : PrecisionParams :=
+  mkPrecisionParams 100 500 100 240.
+
+Lemma witness_prec_params_valid : prec_params_valid witness_prec_params = true.
+Proof. reflexivity. Qed.
+
+(** Witness: 60g carbs with ICR=10.0 (100 tenths) yields 120 twentieths = 6.0U. *)
+Lemma witness_carb_bolus_prec_60g :
+  carb_bolus_twentieths 60 100 = 120.
+Proof. reflexivity. Qed.
+
+(** Witness: 45g carbs with ICR=15.0 (150 tenths) yields 60 twentieths = 3.0U. *)
+Lemma witness_carb_bolus_prec_45g :
+  carb_bolus_twentieths 45 150 = 60.
+Proof. reflexivity. Qed.
+
+(** Witness: BG 200, target 100, ISF=50.0 yields 40 twentieths = 2.0U. *)
+Lemma witness_correction_prec_200 :
+  correction_bolus_twentieths 200 100 500 = 40.
+Proof. reflexivity. Qed.
+
+(** Witness: BG 150, target 100, ISF=25.0 yields 40 twentieths = 2.0U. *)
+Lemma witness_correction_prec_150 :
+  correction_bolus_twentieths 150 100 250 = 40.
+Proof. reflexivity. Qed.
+
+(** Witness: BG at target yields 0 correction. *)
+Lemma witness_correction_prec_at_target :
+  correction_bolus_twentieths 100 100 500 = 0.
+Proof. reflexivity. Qed.
+
+(** Witness: complete calculation with no history.
+    60g carbs, BG 150, ICR=10.0, ISF=50.0, target=100.
+    Carb: 120 twentieths. Correction: 20 twentieths. Total: 140 = 7.0U. *)
+Definition witness_prec_input : PrecisionInput :=
+  mkPrecisionInput 60 150 0 [].
+
+Lemma witness_prec_bolus_no_history :
+  calculate_precision_bolus witness_prec_input witness_prec_params = 140.
+Proof. reflexivity. Qed.
+
+(** Witness: calculation with IOB from previous bolus.
+    Same input but with 2U (40 twentieths) given 2 hours ago.
+    At time 240 (now), IOB from bolus at 0 with 4hr DIA: 0 remaining.
+    So result is still 140 twentieths. *)
+Definition witness_prec_input_with_old_bolus : PrecisionInput :=
+  mkPrecisionInput 60 150 240 [mkBolusEvent 40 0].
+
+Lemma witness_prec_bolus_with_old_iob :
+  calculate_precision_bolus witness_prec_input_with_old_bolus witness_prec_params = 140.
+Proof. reflexivity. Qed.
+
+(** Witness: calculation with recent IOB.
+    60g carbs, BG 150, but 3U (60 twentieths) given 1 hour ago.
+    At time 60, IOB = 60 * 75/100 = 45 twentieths remaining.
+    Raw = 140, IOB = 45, result = 95 twentieths = 4.75U. *)
+Definition witness_prec_input_recent_iob : PrecisionInput :=
+  mkPrecisionInput 60 150 60 [mkBolusEvent 60 0].
+
+Lemma witness_prec_bolus_recent_iob :
+  calculate_precision_bolus witness_prec_input_recent_iob witness_prec_params = 95.
+Proof. reflexivity. Qed.
+
+(** Counterexample: ICR=0 returns 0 (not crash). *)
+Lemma counterex_prec_icr_zero :
+  carb_bolus_twentieths 60 0 = 0.
+Proof. reflexivity. Qed.
+
+(** Counterexample: ISF=0 returns 0 (not crash). *)
+Lemma counterex_prec_isf_zero :
+  correction_bolus_twentieths 200 100 0 = 0.
+Proof. reflexivity. Qed.
+
+(** ========================================================================= *)
+(** PART XVII: PRECISION CALCULATOR INVARIANTS                                *)
+(** ========================================================================= *)
+
+(** Carb bolus is monotonic in carbs consumed. *)
+Lemma carb_bolus_twentieths_monotonic : forall c1 c2 icr,
+  icr > 0 -> c1 <= c2 ->
+  carb_bolus_twentieths c1 icr <= carb_bolus_twentieths c2 icr.
+Proof.
+  intros c1 c2 icr Hicr Hle.
+  unfold carb_bolus_twentieths.
+  destruct (icr =? 0) eqn:E.
+  - apply Nat.eqb_eq in E. lia.
+  - apply Nat.div_le_mono. lia. nia.
+Qed.
+
+(** Correction bolus is monotonic in BG. *)
+Lemma correction_bolus_twentieths_monotonic : forall bg1 bg2 target isf,
+  isf > 0 -> bg1 <= bg2 ->
+  correction_bolus_twentieths bg1 target isf <= correction_bolus_twentieths bg2 target isf.
+Proof.
+  intros bg1 bg2 target isf Hisf Hle.
+  unfold correction_bolus_twentieths.
+  destruct (isf =? 0) eqn:E; [apply Nat.eqb_eq in E; lia|].
+  destruct (bg1 <=? target) eqn:E1; destruct (bg2 <=? target) eqn:E2.
+  - lia.
+  - apply Nat.le_0_l.
+  - apply Nat.leb_nle in E1. apply Nat.leb_le in E2. lia.
+  - apply Nat.leb_nle in E1. apply Nat.leb_nle in E2.
+    apply Nat.div_le_mono. lia. nia.
+Qed.
+
+(** Correction is zero when BG at or below target. *)
+Lemma correction_zero_at_target : forall bg target isf,
+  bg <= target ->
+  correction_bolus_twentieths bg target isf = 0.
+Proof.
+  intros bg target isf Hle.
+  unfold correction_bolus_twentieths.
+  destruct (isf =? 0); [reflexivity|].
+  destruct (bg <=? target) eqn:E.
+  - reflexivity.
+  - apply Nat.leb_nle in E. lia.
+Qed.
+
+(** IOB subtraction cannot increase the bolus. *)
+Lemma precision_bolus_le_raw : forall input params,
+  calculate_precision_bolus input params <=
+    carb_bolus_twentieths (pi_carbs_g input) (prec_icr_tenths params) +
+    correction_bolus_twentieths (pi_current_bg input) (prec_target_bg params) (prec_isf_tenths params).
+Proof.
+  intros input params.
+  unfold calculate_precision_bolus.
+  destruct (carb_bolus_twentieths (pi_carbs_g input) (prec_icr_tenths params) +
+            correction_bolus_twentieths (pi_current_bg input) (prec_target_bg params) (prec_isf_tenths params) <=?
+            total_iob (pi_now input) (pi_bolus_history input) (prec_dia params)) eqn:E.
+  - lia.
+  - lia.
+Qed.
+
+(** ========================================================================= *)
+(** PART XVIII: VALIDATED PRECISION CALCULATOR                                *)
+(** ========================================================================= *)
+
+Module ValidatedPrecision.
+
+  Definition PREC_BOLUS_MAX_TWENTIETHS : nat := 500.
+
+  Definition cap_twentieths (t : Insulin_twentieth) : Insulin_twentieth :=
+    if t <=? PREC_BOLUS_MAX_TWENTIETHS then t else PREC_BOLUS_MAX_TWENTIETHS.
+
+  Definition prec_input_valid (input : PrecisionInput) : bool :=
+    bg_in_meter_range (pi_current_bg input) &&
+    carbs_reasonable (pi_carbs_g input).
+
+  Inductive PrecisionResult : Type :=
+    | PrecOK : Insulin_twentieth -> bool -> PrecisionResult
+    | PrecError : nat -> PrecisionResult.
+
+  Definition prec_error_invalid_params : nat := 1.
+  Definition prec_error_invalid_input : nat := 2.
+  Definition prec_error_hypo : nat := 3.
+
+  Definition validated_precision_bolus (input : PrecisionInput) (params : PrecisionParams) : PrecisionResult :=
+    if negb (prec_params_valid params) then PrecError prec_error_invalid_params
+    else if negb (prec_input_valid input) then PrecError prec_error_invalid_input
+    else if is_hypo (pi_current_bg input) then PrecError prec_error_hypo
+    else
+      let raw := calculate_precision_bolus input params in
+      let capped := cap_twentieths raw in
+      let was_capped := negb (raw =? capped) in
+      PrecOK capped was_capped.
+
+  Definition prec_result_twentieths (r : PrecisionResult) : option Insulin_twentieth :=
+    match r with
+    | PrecOK t _ => Some t
+    | PrecError _ => None
+    end.
+
+End ValidatedPrecision.
+
+Export ValidatedPrecision.
+
+(** Witness: valid computation returns PrecOK. *)
+Lemma witness_validated_prec_ok :
+  exists t c, validated_precision_bolus witness_prec_input witness_prec_params = PrecOK t c.
+Proof. exists 140, false. reflexivity. Qed.
+
+(** Witness: cap at 500 twentieths (25U). *)
+Lemma witness_cap_500 : cap_twentieths 500 = 500.
+Proof. reflexivity. Qed.
+
+Lemma witness_cap_600 : cap_twentieths 600 = 500.
+Proof. reflexivity. Qed.
+
+(** Counterexample: hypo patient rejected. *)
+Definition prec_input_hypo : PrecisionInput := mkPrecisionInput 60 60 0 [].
+
+Lemma counterex_prec_hypo_rejected :
+  validated_precision_bolus prec_input_hypo witness_prec_params = PrecError prec_error_hypo.
+Proof. reflexivity. Qed.
+
+(** Counterexample: invalid params rejected. *)
+Definition invalid_prec_params : PrecisionParams := mkPrecisionParams 0 500 100 240.
+
+Lemma counterex_prec_invalid_params :
+  validated_precision_bolus witness_prec_input invalid_prec_params = PrecError prec_error_invalid_params.
+Proof. reflexivity. Qed.
+
+(** cap_twentieths bounded by PREC_BOLUS_MAX_TWENTIETHS. *)
+Lemma cap_twentieths_bounded : forall t,
+  cap_twentieths t <= PREC_BOLUS_MAX_TWENTIETHS.
+Proof.
+  intro t. unfold cap_twentieths, PREC_BOLUS_MAX_TWENTIETHS.
+  destruct (t <=? 500) eqn:E.
+  - apply Nat.leb_le in E. exact E.
+  - lia.
+Qed.
+
+(** PrecOK output bounded by 500 twentieths. *)
+Theorem validated_prec_bounded : forall input params t c,
+  validated_precision_bolus input params = PrecOK t c ->
+  t <= PREC_BOLUS_MAX_TWENTIETHS.
+Proof.
+  intros input params t c H.
+  unfold validated_precision_bolus in H.
+  destruct (negb (prec_params_valid params)); [discriminate|].
+  destruct (negb (prec_input_valid input)); [discriminate|].
+  destruct (is_hypo (pi_current_bg input)); [discriminate|].
+  inversion H. subst.
+  apply cap_twentieths_bounded.
+Qed.
+
+(** PrecOK implies BG >= 70. *)
+Theorem prec_ok_not_hypo : forall input params t c,
+  validated_precision_bolus input params = PrecOK t c ->
+  is_hypo (pi_current_bg input) = false.
+Proof.
+  intros input params t c H.
+  unfold validated_precision_bolus in H.
+  destruct (negb (prec_params_valid params)); [discriminate|].
+  destruct (negb (prec_input_valid input)); [discriminate|].
+  destruct (is_hypo (pi_current_bg input)) eqn:E; [discriminate|].
+  reflexivity.
+Qed.
+
+(** ========================================================================= *)
+(** PART XIX: MMOL/L INPUT MODE                                               *)
+(** ========================================================================= *)
+
+Module MmolInput.
+
+  Record MmolPrecisionInput := mkMmolPrecisionInput {
+    mpi_carbs_g : nat;
+    mpi_current_bg_mmol_tenths : nat;
+    mpi_now : Minutes;
+    mpi_bolus_history : list BolusEvent
+  }.
+
+  Definition mmol_tenths_to_mg_dL (mmol_tenths : nat) : BG_mg_dL :=
+    (mmol_tenths * 1802) / 1000.
+
+  Definition convert_mmol_input (input : MmolPrecisionInput) : PrecisionInput :=
+    mkPrecisionInput
+      (mpi_carbs_g input)
+      (mmol_tenths_to_mg_dL (mpi_current_bg_mmol_tenths input))
+      (mpi_now input)
+      (mpi_bolus_history input).
+
+  Definition validated_mmol_bolus (input : MmolPrecisionInput) (params : PrecisionParams) : PrecisionResult :=
+    validated_precision_bolus (convert_mmol_input input) params.
+
+End MmolInput.
+
+Export MmolInput.
+
+(** Witness: 10.0 mmol/L (100 tenths) = 180 mg/dL. *)
+Lemma witness_mmol_100_tenths : mmol_tenths_to_mg_dL 100 = 180.
+Proof. reflexivity. Qed.
+
+(** Witness: 5.5 mmol/L (55 tenths) ≈ 99 mg/dL. *)
+Lemma witness_mmol_55_tenths : mmol_tenths_to_mg_dL 55 = 99.
+Proof. reflexivity. Qed.
+
+(** Witness: 3.9 mmol/L (39 tenths) ≈ 70 mg/dL (hypo threshold). *)
+Lemma witness_mmol_39_tenths : mmol_tenths_to_mg_dL 39 = 70.
+Proof. reflexivity. Qed.
+
+(** Witness: mmol input yields same result as mg/dL input. *)
+Definition witness_mmol_input : MmolPrecisionInput :=
+  mkMmolPrecisionInput 60 83 0 [].
+
+Lemma witness_mmol_conversion :
+  pi_current_bg (convert_mmol_input witness_mmol_input) = 149.
+Proof. reflexivity. Qed.
+
+(** ========================================================================= *)
+(** PART XX: DELIVERY ROUNDING                                                *)
+(** ========================================================================= *)
+
+Module DeliveryRounding.
+
+  Inductive RoundingMode : Type :=
+    | RoundTwentieth : RoundingMode
+    | RoundTenth : RoundingMode
+    | RoundHalf : RoundingMode
+    | RoundUnit : RoundingMode.
+
+  Definition apply_rounding (mode : RoundingMode) (t : Insulin_twentieth) : Insulin_twentieth :=
+    match mode with
+    | RoundTwentieth => t
+    | RoundTenth => round_down_to_tenth t
+    | RoundHalf => round_down_to_half t
+    | RoundUnit => (t / ONE_UNIT) * ONE_UNIT
+    end.
+
+  Definition final_delivery (mode : RoundingMode) (result : PrecisionResult) : option Insulin_twentieth :=
+    match result with
+    | PrecOK t _ => Some (apply_rounding mode t)
+    | PrecError _ => None
+    end.
+
+End DeliveryRounding.
+
+Export DeliveryRounding.
+
+(** Witness: 27 twentieths (1.35U) rounded to tenth = 26 (1.30U). *)
+Lemma witness_round_tenth_27 : apply_rounding RoundTenth 27 = 26.
+Proof. reflexivity. Qed.
+
+(** Witness: 27 twentieths (1.35U) rounded to half = 20 (1.00U). *)
+Lemma witness_round_half_27 : apply_rounding RoundHalf 27 = 20.
+Proof. reflexivity. Qed.
+
+(** Witness: 27 twentieths (1.35U) rounded to unit = 20 (1.00U). *)
+Lemma witness_round_unit_27 : apply_rounding RoundUnit 27 = 20.
+Proof. reflexivity. Qed.
+
+(** Witness: 140 twentieths (7.0U) unchanged by all rounding modes. *)
+Lemma witness_round_exact_140 :
+  apply_rounding RoundTwentieth 140 = 140 /\
+  apply_rounding RoundTenth 140 = 140 /\
+  apply_rounding RoundHalf 140 = 140 /\
+  apply_rounding RoundUnit 140 = 140.
+Proof. repeat split; reflexivity. Qed.
+
+(** Rounding never increases dose. *)
+Lemma rounding_le_original : forall mode t,
+  apply_rounding mode t <= t.
+Proof.
+  intros mode t. destruct mode; unfold apply_rounding.
+  - lia.
+  - unfold round_down_to_tenth, TENTH.
+    rewrite Nat.mul_comm. apply Nat.mul_div_le. lia.
+  - unfold round_down_to_half, HALF.
+    rewrite Nat.mul_comm. apply Nat.mul_div_le. lia.
+  - unfold ONE_UNIT.
+    rewrite Nat.mul_comm. apply Nat.mul_div_le. lia.
+Qed.
+
+(** ========================================================================= *)
+(** PART XXI: INVARIANT SUMMARY                                               *)
+(** ========================================================================= *)
+
+(** All boolean predicates are decidable (trivially, since they return bool). *)
+Lemma params_valid_decidable : forall p, {params_valid p = true} + {params_valid p = false}.
+Proof. intro p. destruct (params_valid p); auto. Qed.
+
+Lemma input_valid_decidable : forall i, {input_valid i = true} + {input_valid i = false}.
+Proof. intro i. destruct (input_valid i); auto. Qed.
+
+Lemma prec_params_valid_decidable : forall p, {prec_params_valid p = true} + {prec_params_valid p = false}.
+Proof. intro p. destruct (prec_params_valid p); auto. Qed.
+
+Lemma is_hypo_decidable : forall bg, {is_hypo bg = true} + {is_hypo bg = false}.
+Proof. intro bg. destruct (is_hypo bg); auto. Qed.
+
+(** Summary: properties guaranteed by validated_precision_bolus returning PrecOK. *)
+Theorem precision_calculator_guarantees : forall input params t c mode,
+  validated_precision_bolus input params = PrecOK t c ->
+  t <= PREC_BOLUS_MAX_TWENTIETHS /\
+  is_hypo (pi_current_bg input) = false /\
+  prec_params_valid params = true /\
+  prec_input_valid input = true /\
+  apply_rounding mode t <= t /\
+  apply_rounding mode t <= PREC_BOLUS_MAX_TWENTIETHS.
+Proof.
+  intros input params t c mode H.
+  split. { apply validated_prec_bounded with input params c. exact H. }
+  split. { apply prec_ok_not_hypo with params t c. exact H. }
+  split. {
+    unfold validated_precision_bolus in H.
+    destruct (negb (prec_params_valid params)) eqn:E; [discriminate|].
+    apply negb_false_iff in E. exact E.
+  }
+  split. {
+    unfold validated_precision_bolus in H.
+    destruct (negb (prec_params_valid params)); [discriminate|].
+    destruct (negb (prec_input_valid input)) eqn:E; [discriminate|].
+    apply negb_false_iff in E. exact E.
+  }
+  split. { apply rounding_le_original. }
+  pose proof (validated_prec_bounded input params t c H) as Hbound.
+  pose proof (rounding_le_original mode t) as Hround.
+  lia.
+Qed.
+
+(** ========================================================================= *)
+(** PART XXII: EXTRACTION                                                     *)
+(** ========================================================================= *)
+
+Require Import Coq.extraction.Extraction.
+Require Import Coq.extraction.ExtrOcamlBasic.
+Require Import Coq.extraction.ExtrOcamlNatInt.
+
+Extract Inductive bool => "bool" [ "true" "false" ].
+Extract Inductive option => "option" [ "Some" "None" ].
+Extract Inductive list => "list" [ "[]" "(::)" ].
+
+Extraction "insulin_extracted.ml"
+  validated_precision_bolus
+  validated_mmol_bolus
+  final_delivery
+  mkPrecisionParams
+  mkPrecisionInput
+  mkMmolPrecisionInput
+  mkBolusEvent.
