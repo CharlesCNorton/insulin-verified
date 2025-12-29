@@ -106,7 +106,7 @@ Proof. reflexivity. Qed.
 Lemma counterex_150_not_hyper : is_hyper 150 = false.
 Proof. reflexivity. Qed.
 
-(** Critical safety property: severe hypo implies hypo. *)
+(** Implication: severe hypo implies hypo. *)
 Lemma severe_hypo_implies_hypo : forall bg,
   is_severe_hypo bg = true -> is_hypo bg = true.
 Proof.
@@ -279,7 +279,7 @@ Lemma counterex_carb_bolus_icr_zero :
   carb_bolus_safe 60 0 = None.
 Proof. reflexivity. Qed.
 
-(** Critical property: carb bolus is monotonic in carbs. *)
+(** Property: carb bolus is monotonic in carbs. *)
 Lemma carb_bolus_monotonic_carbs : forall c1 c2 icr,
   icr > 0 -> c1 <= c2 -> carb_bolus c1 icr <= carb_bolus c2 icr.
 Proof.
@@ -288,7 +288,7 @@ Proof.
   apply Nat.div_le_mono. lia. exact Hle.
 Qed.
 
-(** Critical property: carb bolus is bounded by carbs (since ICR >= 1). *)
+(** Property: carb bolus is bounded by carbs (since ICR >= 1). *)
 Lemma carb_bolus_bounded : forall carbs icr,
   icr >= 1 -> carb_bolus carbs icr <= carbs.
 Proof.
@@ -298,7 +298,7 @@ Proof.
   nia.
 Qed.
 
-(** Critical property: more insulin-sensitive (higher ICR) means less insulin. *)
+(** Property: more insulin-sensitive (higher ICR) means less insulin. *)
 Lemma carb_bolus_antimonotonic_icr : forall carbs icr1 icr2,
   icr1 > 0 -> icr2 > 0 -> icr1 <= icr2 ->
   carb_bolus carbs icr2 <= carb_bolus carbs icr1.
@@ -352,7 +352,7 @@ Lemma counterex_correction_isf_zero :
   correction_bolus_safe 200 100 0 = None.
 Proof. reflexivity. Qed.
 
-(** Critical safety: correction is 0 when BG <= target. *)
+(** Property: correction is 0 when BG <= target. *)
 Lemma correction_zero_when_at_or_below_target : forall bg target isf,
   bg <= target -> correction_bolus bg target isf = 0.
 Proof.
@@ -363,7 +363,7 @@ Proof.
   - rewrite Nat.leb_gt in E. lia.
 Qed.
 
-(** Critical property: correction is monotonic in BG. *)
+(** Property: correction is monotonic in BG. *)
 Lemma correction_monotonic_bg : forall bg1 bg2 target isf,
   isf > 0 -> bg1 <= bg2 ->
   correction_bolus bg1 target isf <= correction_bolus bg2 target isf.
@@ -378,7 +378,7 @@ Proof.
     apply Nat.div_le_mono. lia. lia.
 Qed.
 
-(** Critical property: higher ISF (more sensitive) means less correction. *)
+(** Property: higher ISF (more sensitive) means less correction. *)
 Lemma correction_antimonotonic_isf : forall bg target isf1 isf2,
   isf1 > 0 -> isf2 > 0 -> isf1 <= isf2 ->
   correction_bolus bg target isf2 <= correction_bolus bg target isf1.
@@ -420,7 +420,7 @@ Lemma witness_zero_iob :
   subtract_iob 5 0 = 5.
 Proof. reflexivity. Qed.
 
-(** Critical safety: result is always <= original bolus. *)
+(** Property: result is always <= original bolus. *)
 Lemma iob_subtraction_bounded : forall bolus iob,
   subtract_iob bolus iob <= bolus.
 Proof.
@@ -429,7 +429,7 @@ Proof.
   destruct (bolus <=? iob) eqn:E; lia.
 Qed.
 
-(** Critical safety: result is always non-negative (guaranteed by nat). *)
+(** Property: result is always non-negative (guaranteed by nat). *)
 Lemma iob_subtraction_nonneg : forall bolus iob,
   0 <= subtract_iob bolus iob.
 Proof. intros. lia. Qed.
@@ -497,7 +497,7 @@ Lemma counterex_invalid_params_none :
   calculate_bolus_safe witness_input_1 counterex_zero_icr = None.
 Proof. reflexivity. Qed.
 
-(** Critical safety: bolus is bounded when IOB is subtracted. *)
+(** Property: bolus is bounded when IOB is subtracted. *)
 Lemma bolus_never_exceeds_raw : forall input params,
   calculate_bolus input params <=
     carb_bolus (bi_carbs input) (pp_icr params) +
@@ -727,7 +727,7 @@ Proof. reflexivity. Qed.
 Lemma witness_uncapped_not_flagged : bolus_was_capped 10 (cap_bolus 10) = false.
 Proof. reflexivity. Qed.
 
-(** Critical safety: cap_bolus always <= BOLUS_SANITY_MAX. *)
+(** Property: cap_bolus always <= BOLUS_SANITY_MAX. *)
 Lemma cap_bolus_bounded : forall bolus,
   cap_bolus bolus <= BOLUS_SANITY_MAX.
 Proof.
@@ -738,7 +738,7 @@ Proof.
   - lia.
 Qed.
 
-(** Critical safety: cap_bolus always <= original. *)
+(** Property: cap_bolus always <= original. *)
 Lemma cap_bolus_le_original : forall bolus,
   cap_bolus bolus <= bolus.
 Proof.
@@ -1625,7 +1625,510 @@ Proof.
 Qed.
 
 (** ========================================================================= *)
-(** PART XXII: EXTRACTION                                                     *)
+(** PART XXII: STACKING GUARD                                                 *)
+(** Prevents dangerous insulin stacking by warning when bolusing too soon.    *)
+(** ========================================================================= *)
+
+Module StackingGuard.
+
+  Definition MINIMUM_BOLUS_INTERVAL : Minutes := 15.
+  Definition STACKING_WARNING_THRESHOLD : Minutes := 60.
+
+  Definition time_since_last_bolus (now : Minutes) (history : list BolusEvent) : option Minutes :=
+    match history with
+    | nil => None
+    | e :: _ =>
+        if now <? be_time_minutes e then None
+        else Some (now - be_time_minutes e)
+    end.
+
+  Definition bolus_too_soon (now : Minutes) (history : list BolusEvent) : bool :=
+    match time_since_last_bolus now history with
+    | None => false
+    | Some elapsed => elapsed <? MINIMUM_BOLUS_INTERVAL
+    end.
+
+  Definition stacking_warning (now : Minutes) (history : list BolusEvent) : bool :=
+    match time_since_last_bolus now history with
+    | None => false
+    | Some elapsed => elapsed <? STACKING_WARNING_THRESHOLD
+    end.
+
+  Definition recent_insulin_delivered (now : Minutes) (history : list BolusEvent) (dia : DIA_minutes) : Insulin_twentieth :=
+    total_iob now history dia.
+
+End StackingGuard.
+
+Export StackingGuard.
+
+(** Witness: no history means no stacking concern. *)
+Lemma witness_no_history_no_stacking :
+  bolus_too_soon 100 [] = false /\ stacking_warning 100 [] = false.
+Proof. split; reflexivity. Qed.
+
+(** Witness: bolus 5 minutes ago is too soon. *)
+Definition recent_bolus_5min : list BolusEvent := [mkBolusEvent 40 95].
+
+Lemma witness_5min_too_soon :
+  bolus_too_soon 100 recent_bolus_5min = true.
+Proof. reflexivity. Qed.
+
+(** Witness: bolus 5 minutes ago triggers stacking warning. *)
+Lemma witness_5min_stacking_warning :
+  stacking_warning 100 recent_bolus_5min = true.
+Proof. reflexivity. Qed.
+
+(** Witness: bolus 30 minutes ago is not too soon but triggers warning. *)
+Definition recent_bolus_30min : list BolusEvent := [mkBolusEvent 40 70].
+
+Lemma witness_30min_not_too_soon :
+  bolus_too_soon 100 recent_bolus_30min = false.
+Proof. reflexivity. Qed.
+
+Lemma witness_30min_stacking_warning :
+  stacking_warning 100 recent_bolus_30min = true.
+Proof. reflexivity. Qed.
+
+(** Witness: bolus 90 minutes ago is safe, no warning. *)
+Definition old_bolus_90min : list BolusEvent := [mkBolusEvent 40 10].
+
+Lemma witness_90min_safe :
+  bolus_too_soon 100 old_bolus_90min = false /\
+  stacking_warning 100 old_bolus_90min = false.
+Proof. split; reflexivity. Qed.
+
+(** Counterexample: bolus in future does not trigger warning. *)
+Definition future_bolus : list BolusEvent := [mkBolusEvent 40 200].
+
+Lemma counterex_future_bolus_no_warning :
+  bolus_too_soon 100 future_bolus = false /\
+  stacking_warning 100 future_bolus = false.
+Proof. split; reflexivity. Qed.
+
+(** Property: if bolus_too_soon is false and history non-empty,
+    at least MINIMUM_BOLUS_INTERVAL has passed. *)
+Lemma too_soon_false_means_interval_passed : forall now e rest,
+  bolus_too_soon now (e :: rest) = false ->
+  now >= be_time_minutes e ->
+  now - be_time_minutes e >= MINIMUM_BOLUS_INTERVAL.
+Proof.
+  intros now e rest H Hge.
+  unfold bolus_too_soon, time_since_last_bolus, MINIMUM_BOLUS_INTERVAL in *.
+  destruct (now <? be_time_minutes e) eqn:E1.
+  - apply Nat.ltb_lt in E1. lia.
+  - apply Nat.ltb_ge in H. exact H.
+Qed.
+
+(** ========================================================================= *)
+(** PART XXIII: PEDIATRIC PARAMETERS                                          *)
+(** Children have higher ICR (30-50+ g/U) and ISF (100-300+ mg/dL/U).         *)
+(** ========================================================================= *)
+
+Module PediatricParams.
+
+  Definition PEDS_ICR_MIN : nat := 5.
+  Definition PEDS_ICR_MAX : nat := 100.
+  Definition PEDS_ISF_MIN : nat := 20.
+  Definition PEDS_ISF_MAX : nat := 400.
+
+  Definition PEDS_ICR_TENTHS_MIN : nat := 50.
+  Definition PEDS_ICR_TENTHS_MAX : nat := 1000.
+  Definition PEDS_ISF_TENTHS_MIN : nat := 200.
+  Definition PEDS_ISF_TENTHS_MAX : nat := 4000.
+
+  Definition PEDS_BOLUS_MAX : nat := 15.
+  Definition PEDS_BOLUS_MAX_TWENTIETHS : nat := 300.
+
+  Record PediatricPatientParams := mkPediatricPatientParams {
+    ped_icr : nat;
+    ped_isf : nat;
+    ped_target_bg : BG_mg_dL;
+    ped_weight_kg : nat;
+    ped_age_years : nat
+  }.
+
+  Definition peds_params_valid (p : PediatricPatientParams) : bool :=
+    (PEDS_ICR_MIN <=? ped_icr p) && (ped_icr p <=? PEDS_ICR_MAX) &&
+    (PEDS_ISF_MIN <=? ped_isf p) && (ped_isf p <=? PEDS_ISF_MAX) &&
+    (BG_HYPO <=? ped_target_bg p) && (ped_target_bg p <=? BG_HYPER) &&
+    (1 <=? ped_icr p) && (1 <=? ped_isf p) &&
+    (1 <=? ped_weight_kg p) && (ped_weight_kg p <=? 150) &&
+    (ped_age_years p <=? 21).
+
+  Definition total_daily_dose_limit (weight_kg : nat) : nat :=
+    weight_kg.
+
+  Definition peds_bolus_limit (weight_kg : nat) : nat :=
+    let tdd := total_daily_dose_limit weight_kg in
+    if tdd / 4 <? PEDS_BOLUS_MAX then tdd / 4 else PEDS_BOLUS_MAX.
+
+End PediatricParams.
+
+Export PediatricParams.
+
+(** Witness: small child params (ICR=50, ISF=200, weight=20kg, age=5). *)
+Definition witness_small_child : PediatricPatientParams :=
+  mkPediatricPatientParams 50 200 110 20 5.
+
+Lemma witness_small_child_valid : peds_params_valid witness_small_child = true.
+Proof. reflexivity. Qed.
+
+(** Witness: insulin-sensitive toddler (ICR=80, ISF=300). *)
+Definition witness_toddler : PediatricPatientParams :=
+  mkPediatricPatientParams 80 300 120 12 2.
+
+Lemma witness_toddler_valid : peds_params_valid witness_toddler = true.
+Proof. reflexivity. Qed.
+
+(** Witness: adolescent (ICR=15, ISF=40, similar to adult). *)
+Definition witness_adolescent : PediatricPatientParams :=
+  mkPediatricPatientParams 15 40 100 60 16.
+
+Lemma witness_adolescent_valid : peds_params_valid witness_adolescent = true.
+Proof. reflexivity. Qed.
+
+(** Counterexample: adult-range ICR=10 is valid for peds (overlapping range). *)
+Definition witness_peds_adult_overlap : PediatricPatientParams :=
+  mkPediatricPatientParams 10 50 100 45 14.
+
+Lemma witness_peds_adult_overlap_valid : peds_params_valid witness_peds_adult_overlap = true.
+Proof. reflexivity. Qed.
+
+(** Counterexample: ICR=0 is invalid. *)
+Definition counterex_peds_zero_icr : PediatricPatientParams :=
+  mkPediatricPatientParams 0 200 110 20 5.
+
+Lemma counterex_peds_zero_icr_invalid : peds_params_valid counterex_peds_zero_icr = false.
+Proof. reflexivity. Qed.
+
+(** Counterexample: ISF > 400 is invalid. *)
+Definition counterex_peds_isf_500 : PediatricPatientParams :=
+  mkPediatricPatientParams 50 500 110 20 5.
+
+Lemma counterex_peds_isf_500_invalid : peds_params_valid counterex_peds_isf_500 = false.
+Proof. reflexivity. Qed.
+
+(** Counterexample: weight 0 is invalid. *)
+Definition counterex_peds_zero_weight : PediatricPatientParams :=
+  mkPediatricPatientParams 50 200 110 0 5.
+
+Lemma counterex_peds_zero_weight_invalid : peds_params_valid counterex_peds_zero_weight = false.
+Proof. reflexivity. Qed.
+
+(** Witness: 20kg child bolus limit = 20/4 = 5U (< 15U cap). *)
+Lemma witness_20kg_bolus_limit : peds_bolus_limit 20 = 5.
+Proof. reflexivity. Qed.
+
+(** Witness: 60kg adolescent bolus limit = 60/4 = 15U (hits cap). *)
+Lemma witness_60kg_bolus_limit : peds_bolus_limit 60 = 15.
+Proof. reflexivity. Qed.
+
+(** Witness: 80kg large teen bolus limit = 15U (capped). *)
+Lemma witness_80kg_bolus_limit : peds_bolus_limit 80 = 15.
+Proof. reflexivity. Qed.
+
+(** Property: pediatric bolus limit never exceeds PEDS_BOLUS_MAX. *)
+Lemma peds_bolus_limit_bounded : forall weight,
+  peds_bolus_limit weight <= PEDS_BOLUS_MAX.
+Proof.
+  intro weight.
+  unfold peds_bolus_limit, total_daily_dose_limit, PEDS_BOLUS_MAX.
+  destruct (weight / 4 <? 15) eqn:E.
+  - apply Nat.ltb_lt in E. lia.
+  - lia.
+Qed.
+
+(** Property: pediatric bolus limit scales with weight. *)
+Lemma peds_bolus_limit_scales : forall w1 w2,
+  w1 <= w2 -> peds_bolus_limit w1 <= peds_bolus_limit w2.
+Proof.
+  intros w1 w2 Hle.
+  unfold peds_bolus_limit, total_daily_dose_limit, PEDS_BOLUS_MAX.
+  destruct (w1 / 4 <? 15) eqn:E1; destruct (w2 / 4 <? 15) eqn:E2.
+  - apply Nat.div_le_mono; lia.
+  - apply Nat.ltb_lt in E1. lia.
+  - apply Nat.ltb_ge in E1. apply Nat.ltb_lt in E2.
+    apply Nat.div_le_mono with (c := 4) in Hle; lia.
+  - lia.
+Qed.
+
+(** ========================================================================= *)
+(** PART XXIV: BILINEAR IOB DECAY MODEL                                       *)
+(** More accurate than linear: peak action at ~75 min, then decay.            *)
+(** Models rapid-acting insulin (lispro, aspart, glulisine).                  *)
+(** ========================================================================= *)
+
+Module BilinearIOB.
+
+  Definition PEAK_TIME : Minutes := 75.
+
+  Definition bilinear_iob_fraction (elapsed : Minutes) (dia : DIA_minutes) : nat :=
+    if dia =? 0 then 0
+    else if dia <=? elapsed then 0
+    else if elapsed <=? PEAK_TIME then
+      100 - (elapsed * 25) / PEAK_TIME
+    else
+      ((dia - elapsed) * 75) / (dia - PEAK_TIME).
+
+  Definition bilinear_iob_from_bolus (now : Minutes) (event : BolusEvent) (dia : DIA_minutes) : Insulin_twentieth :=
+    if now <? be_time_minutes event then 0
+    else
+      let elapsed := now - be_time_minutes event in
+      let fraction := bilinear_iob_fraction elapsed dia in
+      (be_dose_twentieths event * fraction) / 100.
+
+  Fixpoint total_bilinear_iob (now : Minutes) (events : list BolusEvent) (dia : DIA_minutes) : Insulin_twentieth :=
+    match events with
+    | nil => 0
+    | e :: rest => bilinear_iob_from_bolus now e dia + total_bilinear_iob now rest dia
+    end.
+
+End BilinearIOB.
+
+Export BilinearIOB.
+
+(** Witness: at time 0, 100% of insulin remains. *)
+Lemma witness_bilinear_at_zero :
+  bilinear_iob_fraction 0 DIA_4_HOURS = 100.
+Proof. reflexivity. Qed.
+
+(** Witness: at peak time (75 min), ~75% remains (rising phase complete). *)
+Lemma witness_bilinear_at_peak :
+  bilinear_iob_fraction 75 DIA_4_HOURS = 75.
+Proof. reflexivity. Qed.
+
+(** Witness: at half DIA (120 min), in decay phase.
+    (240 - 120) * 75 / (240 - 75) = 120 * 75 / 165 = 54. *)
+Lemma witness_bilinear_at_half_dia :
+  bilinear_iob_fraction 120 DIA_4_HOURS = 54.
+Proof. reflexivity. Qed.
+
+(** Witness: at 3/4 DIA (180 min).
+    (240 - 180) * 75 / 165 = 60 * 75 / 165 = 27. *)
+Lemma witness_bilinear_at_180 :
+  bilinear_iob_fraction 180 DIA_4_HOURS = 27.
+Proof. reflexivity. Qed.
+
+(** Witness: at DIA (240 min), 0% remains. *)
+Lemma witness_bilinear_at_dia :
+  bilinear_iob_fraction 240 DIA_4_HOURS = 0.
+Proof. reflexivity. Qed.
+
+(** Witness: beyond DIA, 0% remains. *)
+Lemma witness_bilinear_beyond_dia :
+  bilinear_iob_fraction 300 DIA_4_HOURS = 0.
+Proof. reflexivity. Qed.
+
+(** Witness: 1U (20 twentieths) at time 0, checked at 120 min.
+    Fraction = 54%, IOB = 20 * 54 / 100 = 10 twentieths. *)
+Lemma witness_bilinear_iob_at_120 :
+  bilinear_iob_from_bolus 120 (mkBolusEvent 20 0) DIA_4_HOURS = 10.
+Proof. reflexivity. Qed.
+
+(** Witness: 1U at time 0, checked at peak (75 min).
+    Fraction = 75%, IOB = 20 * 75 / 100 = 15 twentieths. *)
+Lemma witness_bilinear_iob_at_peak :
+  bilinear_iob_from_bolus 75 (mkBolusEvent 20 0) DIA_4_HOURS = 15.
+Proof. reflexivity. Qed.
+
+(** Counterexample: future bolus contributes 0. *)
+Lemma counterex_bilinear_future :
+  bilinear_iob_from_bolus 50 (mkBolusEvent 20 100) DIA_4_HOURS = 0.
+Proof. reflexivity. Qed.
+
+(** Counterexample: DIA=0 returns 0 (graceful degradation). *)
+Lemma counterex_bilinear_dia_zero :
+  bilinear_iob_fraction 60 0 = 0.
+Proof. reflexivity. Qed.
+
+(** Property: bilinear fraction never exceeds 100. *)
+Lemma bilinear_fraction_le_100 : forall elapsed dia,
+  bilinear_iob_fraction elapsed dia <= 100.
+Proof.
+  intros elapsed dia.
+  unfold bilinear_iob_fraction, PEAK_TIME.
+  destruct (dia =? 0) eqn:E0; [lia|].
+  destruct (dia <=? elapsed) eqn:E1; [lia|].
+  destruct (elapsed <=? 75) eqn:E2.
+  - apply Nat.leb_le in E2.
+    assert (elapsed * 25 / 75 <= elapsed * 25 / 75) by lia.
+    assert (elapsed * 25 / 75 <= 25) by (apply Nat.div_le_upper_bound; lia).
+    lia.
+  - apply Nat.leb_nle in E1. apply Nat.leb_nle in E2. apply Nat.eqb_neq in E0.
+    apply Nat.div_le_upper_bound. lia.
+    nia.
+Qed.
+
+(** Property: bilinear IOB bounded by original dose. *)
+Lemma bilinear_iob_bounded : forall now event dia,
+  bilinear_iob_from_bolus now event dia <= be_dose_twentieths event.
+Proof.
+  intros now event dia.
+  unfold bilinear_iob_from_bolus.
+  destruct (now <? be_time_minutes event); [lia|].
+  pose proof (bilinear_fraction_le_100 (now - be_time_minutes event) dia) as Hfrac.
+  apply Nat.div_le_upper_bound. lia.
+  nia.
+Qed.
+
+(** Comparison: bilinear vs linear at 120 min shows bilinear retains more IOB.
+    Linear: 50%. Bilinear: 54%. More conservative = safer. *)
+Lemma bilinear_more_conservative_at_120 :
+  bilinear_iob_fraction 120 DIA_4_HOURS = 54 /\
+  iob_fraction_remaining 120 DIA_4_HOURS = 50.
+Proof. split; reflexivity. Qed.
+
+(** Comparison: at peak, bilinear shows 75% vs linear 69%.
+    Bilinear accounts for rising insulin action curve. *)
+Lemma bilinear_higher_at_peak :
+  bilinear_iob_fraction 75 DIA_4_HOURS = 75 /\
+  iob_fraction_remaining 75 DIA_4_HOURS = 68.
+Proof. split; reflexivity. Qed.
+
+(** ========================================================================= *)
+(** PART XXV: NONLINEAR ISF CORRECTION                                        *)
+(** Above 250 mg/dL, insulin resistance increases. We reduce effective ISF    *)
+(** by 20% for BG 250-350, 40% for BG >350. This increases correction dose.   *)
+(** Source: Walsh et al., "Using Insulin" (2003); clinical consensus.         *)
+(** ========================================================================= *)
+
+Module NonlinearISF.
+
+  Definition BG_RESISTANCE_MILD : nat := 250.
+  Definition BG_RESISTANCE_SEVERE : nat := 350.
+
+  Definition ISF_REDUCTION_MILD : nat := 80.
+  Definition ISF_REDUCTION_SEVERE : nat := 60.
+
+  Definition adjusted_isf (bg : BG_mg_dL) (base_isf : nat) : nat :=
+    if bg <? BG_RESISTANCE_MILD then base_isf
+    else if bg <? BG_RESISTANCE_SEVERE then (base_isf * ISF_REDUCTION_MILD) / 100
+    else (base_isf * ISF_REDUCTION_SEVERE) / 100.
+
+  Definition adjusted_isf_tenths (bg : BG_mg_dL) (base_isf_tenths : nat) : nat :=
+    if bg <? BG_RESISTANCE_MILD then base_isf_tenths
+    else if bg <? BG_RESISTANCE_SEVERE then (base_isf_tenths * ISF_REDUCTION_MILD) / 100
+    else (base_isf_tenths * ISF_REDUCTION_SEVERE) / 100.
+
+  Definition correction_with_resistance (current_bg target_bg : BG_mg_dL) (base_isf : nat) : nat :=
+    if current_bg <=? target_bg then 0
+    else
+      let eff_isf := adjusted_isf current_bg base_isf in
+      if eff_isf =? 0 then 0
+      else (current_bg - target_bg) / eff_isf.
+
+  Definition correction_twentieths_with_resistance (current_bg target_bg : BG_mg_dL) (base_isf_tenths : nat) : Insulin_twentieth :=
+    if current_bg <=? target_bg then 0
+    else
+      let eff_isf := adjusted_isf_tenths current_bg base_isf_tenths in
+      if eff_isf =? 0 then 0
+      else ((current_bg - target_bg) * 200) / eff_isf.
+
+End NonlinearISF.
+
+Export NonlinearISF.
+
+(** Witness: BG 200 (below threshold) uses base ISF unchanged. *)
+Lemma witness_isf_normal_bg :
+  adjusted_isf 200 50 = 50.
+Proof. reflexivity. Qed.
+
+(** Witness: BG 300 (mild resistance) reduces ISF by 20%. ISF 50 -> 40. *)
+Lemma witness_isf_mild_resistance :
+  adjusted_isf 300 50 = 40.
+Proof. reflexivity. Qed.
+
+(** Witness: BG 400 (severe resistance) reduces ISF by 40%. ISF 50 -> 30. *)
+Lemma witness_isf_severe_resistance :
+  adjusted_isf 400 50 = 30.
+Proof. reflexivity. Qed.
+
+(** Witness: correction at BG 200, target 100, ISF 50.
+    No resistance: (200-100)/50 = 2 units. *)
+Lemma witness_correction_no_resistance :
+  correction_with_resistance 200 100 50 = 2.
+Proof. reflexivity. Qed.
+
+(** Witness: correction at BG 300, target 100, ISF 50.
+    Mild resistance: effective ISF = 40. (300-100)/40 = 5 units. *)
+Lemma witness_correction_mild_resistance :
+  correction_with_resistance 300 100 50 = 5.
+Proof. reflexivity. Qed.
+
+(** Witness: correction at BG 400, target 100, ISF 50.
+    Severe resistance: effective ISF = 30. (400-100)/30 = 10 units. *)
+Lemma witness_correction_severe_resistance :
+  correction_with_resistance 400 100 50 = 10.
+Proof. reflexivity. Qed.
+
+(** Counterexample: BG at target yields 0 regardless of resistance. *)
+Lemma counterex_at_target_no_correction :
+  correction_with_resistance 100 100 50 = 0.
+Proof. reflexivity. Qed.
+
+(** Counterexample: BG below target yields 0. *)
+Lemma counterex_below_target_no_correction :
+  correction_with_resistance 80 100 50 = 0.
+Proof. reflexivity. Qed.
+
+(** Counterexample: ISF 0 yields 0 (no crash). *)
+Lemma counterex_isf_zero_no_crash :
+  correction_with_resistance 300 100 0 = 0.
+Proof. reflexivity. Qed.
+
+(** Property: adjusted ISF is always <= base ISF. *)
+Lemma adjusted_isf_le_base : forall bg base_isf,
+  adjusted_isf bg base_isf <= base_isf.
+Proof.
+  intros bg base_isf.
+  unfold adjusted_isf, BG_RESISTANCE_MILD, BG_RESISTANCE_SEVERE,
+         ISF_REDUCTION_MILD, ISF_REDUCTION_SEVERE.
+  destruct (bg <? 250) eqn:E1; [lia|].
+  destruct (bg <? 350) eqn:E2.
+  - apply Nat.div_le_upper_bound. lia. nia.
+  - apply Nat.div_le_upper_bound. lia. nia.
+Qed.
+
+(** Adjusted ISF for minimum clinical ISF (20) at mild resistance: 16. *)
+Lemma witness_adjusted_isf_20_at_300 :
+  adjusted_isf 300 20 = 16.
+Proof. reflexivity. Qed.
+
+(** Adjusted ISF for typical ISF (50) at severe resistance: 30. *)
+Lemma witness_adjusted_isf_50_at_400 :
+  adjusted_isf 400 50 = 30.
+Proof. reflexivity. Qed.
+
+(** Resistance correction increases dose vs linear model: witnesses. *)
+Lemma witness_resistance_increases_300 :
+  correction_with_resistance 300 100 50 = 5 /\
+  correction_bolus 300 100 50 = 4.
+Proof. split; reflexivity. Qed.
+
+Lemma witness_resistance_increases_400 :
+  correction_with_resistance 400 100 50 = 10 /\
+  correction_bolus 400 100 50 = 6.
+Proof. split; reflexivity. Qed.
+
+(** Adversarial: what if BG is exactly at threshold boundary? *)
+Lemma boundary_249_no_adjustment :
+  adjusted_isf 249 50 = 50.
+Proof. reflexivity. Qed.
+
+Lemma boundary_250_mild_adjustment :
+  adjusted_isf 250 50 = 40.
+Proof. reflexivity. Qed.
+
+Lemma boundary_349_mild_adjustment :
+  adjusted_isf 349 50 = 40.
+Proof. reflexivity. Qed.
+
+Lemma boundary_350_severe_adjustment :
+  adjusted_isf 350 50 = 30.
+Proof. reflexivity. Qed.
+
+(** ========================================================================= *)
+(** PART XXVI: EXTRACTION                                                     *)
 (** ========================================================================= *)
 
 Require Import Coq.extraction.Extraction.
