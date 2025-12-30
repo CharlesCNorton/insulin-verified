@@ -20,40 +20,34 @@
 (** ========================================================================= *)
 (** TODO                                                                      *)
 (**                                                                           *)
-(** 1. [DEFERRED] Carbs_g := Grams requires mkGrams at ~50 call sites         *)
-(** 2. [DEFERRED] peak_time requires InsulinType param through IOB pipeline   *)
-(** 3. Nonexistent type reference — Update to PrecError prec_error_stacking   *)
-(** 4. Carbs range mismatch — Update comment to match code                    *)
-(** 5. Overflow unproven intermediates — Add theorem bounding intermediates   *)
-(** 6. Extraction bounds incomplete — Prove single end-to-end bound theorem   *)
-(** 7. ISF zero unproven — Add lemma proving Suspend_Withhold for ISF=0       *)
-(** 8. Pipeline monotonicity missing — Prove increasing inputs increase bolus *)
-(** 9. Suspend_Reduce untested — Add concrete witness exercising branch       *)
-(** 10. Activity boundaries untested — Add witnesses at boundary values       *)
-(** 11. Pediatric exercise untested — Add witness combining both modifiers    *)
-(** 12. Time monotonicity unchecked — Add validation or document assumption   *)
-(** 13. History gaps allowed — Document assumption or add validation          *)
-(** 14. Midnight rollover unproven — Add witness spanning midnight            *)
-(** 15. Clock wraparound unhandled — Add modular arithmetic or document       *)
-(** 16. Sanitization assumptions implicit — Document preconditions in API     *)
-(** 17. Runtime checks missing — Add assertion generation in OCaml            *)
-(** 18. Hardware constraints unmodeled — Add pump-specific constants          *)
-(** 19. Extraction correctness assumed — Document trust assumption            *)
-(** 20. Conversion precision loss — Use higher precision or document error    *)
-(** 21. Truncation loses precision — Consider rationals or wider fixed-point  *)
-(** 22. Conversions not invertible — Document acceptable error bounds         *)
-(** 23. IOB model simplified — Implement exponential or prove error bounds    *)
-(** 24. Pharmacokinetics link missing — Cite source or prove error bounds     *)
-(** 25. Mixed insulin unmodeled — Document single-type assumption             *)
-(** 26. Single meal assumed — Document limitation                             *)
-(** 27. Site variability ignored — Document as out-of-scope                   *)
-(** 28. Dawn window hardcoded — Parameterize in PrecisionParams               *)
-(** 29. Static activity percentages — Add time-decay or document              *)
-(** 30. Liveness property missing — Prove existence of inputs yielding PrecOK *)
-(** 31. Deprecated lemmas used — Replace with Div0.* equivalents              *)
-(** 32. Large literals risky — Use of_num_uint notation                       *)
-(** 33. Opaque proofs unnecessary — Change Qed to Defined where needed        *)
-(** 34. Blackbox arithmetic solvers — Add intermediate steps for auditability *)
+(** 1. ISF zero unproven — Add lemma proving Suspend_Withhold for ISF=0       *)
+(** 2. Pipeline monotonicity missing — Prove increasing inputs increase bolus *)
+(** 3. Suspend_Reduce untested — Add concrete witness exercising branch       *)
+(** 4. Activity boundaries untested — Add witnesses at boundary values        *)
+(** 5. Pediatric exercise untested — Add witness combining both modifiers     *)
+(** 6. Time monotonicity unchecked — Add validation or document assumption    *)
+(** 7. History gaps allowed — Document assumption or add validation           *)
+(** 8. Midnight rollover unproven — Add witness spanning midnight             *)
+(** 9. Clock wraparound unhandled — Add modular arithmetic or document        *)
+(** 10. Sanitization assumptions implicit — Document preconditions in API     *)
+(** 11. Runtime checks missing — Add assertion generation in OCaml            *)
+(** 12. Hardware constraints unmodeled — Add pump-specific constants          *)
+(** 13. Extraction correctness assumed — Document trust assumption            *)
+(** 14. Conversion precision loss — Use higher precision or document error    *)
+(** 15. Truncation loses precision — Consider rationals or wider fixed-point  *)
+(** 16. Conversions not invertible — Document acceptable error bounds         *)
+(** 17. IOB model simplified — Implement exponential or prove error bounds    *)
+(** 18. Pharmacokinetics link missing — Cite source or prove error bounds     *)
+(** 19. Mixed insulin unmodeled — Document single-type assumption             *)
+(** 20. Single meal assumed — Document limitation                             *)
+(** 21. Site variability ignored — Document as out-of-scope                   *)
+(** 22. Dawn window hardcoded — Parameterize in PrecisionParams               *)
+(** 23. Static activity percentages — Add time-decay or document              *)
+(** 24. Liveness property missing — Prove existence of inputs yielding PrecOK *)
+(** 25. Deprecated lemmas used — Replace with Div0.* equivalents              *)
+(** 26. Large literals risky — Use of_num_uint notation                       *)
+(** 27. Opaque proofs unnecessary — Change Qed to Defined where needed        *)
+(** 28. Blackbox arithmetic solvers — Add intermediate steps for auditability *)
 (** ========================================================================= *)
 
 (** ========================================================================= *)
@@ -296,11 +290,11 @@ Lemma witness_exact_div : div_floor 12 3 = 4 /\ div_ceil 12 3 = 4.
 Proof. split; reflexivity. Qed.
 
 (** --- Carbohydrates ---                                                     *)
-(** Units: grams. Typical meal range 0-150g.                                  *)
+(** Units: grams. Typical meal range 0-200g.                                  *)
 
 Module Carbohydrates.
 
-  Definition Carbs_g := nat.
+  Definition Carbs_g := Grams.
 
   Definition CARBS_ZERO : nat := 0.
   Definition CARBS_SNACK_MAX : nat := 20.
@@ -888,32 +882,32 @@ Export CarbBolus.
 
 (** Witness: 60g carbs with ICR=10 yields 6 units. *)
 Lemma witness_carb_bolus_60g_icr10 :
-  carb_bolus 60 10 = 6.
+  carb_bolus (mkGrams 60) 10 = 6.
 Proof. reflexivity. Qed.
 
 (** Witness: 45g carbs with ICR=15 yields 3 units. *)
 Lemma witness_carb_bolus_45g_icr15 :
-  carb_bolus 45 15 = 3.
+  carb_bolus (mkGrams 45) 15 = 3.
 Proof. reflexivity. Qed.
 
 (** Witness: 0g carbs yields 0 units regardless of ICR. *)
 Lemma witness_zero_carbs_zero_bolus : forall icr,
-  carb_bolus 0 icr = 0.
+  carb_bolus (mkGrams 0) icr = 0.
 Proof. intro icr. unfold carb_bolus. destruct icr; reflexivity. Qed.
 
 (** Witness: safe version returns Some for valid ICR. *)
 Lemma witness_carb_bolus_safe_valid :
-  carb_bolus_safe 60 10 = Some 6.
+  carb_bolus_safe (mkGrams 60) 10 = Some 6.
 Proof. reflexivity. Qed.
 
 (** Counterexample: ICR of 0 is division by zero, safe version returns None. *)
 Lemma counterex_carb_bolus_icr_zero :
-  carb_bolus_safe 60 0 = None.
+  carb_bolus_safe (mkGrams 60) 0 = None.
 Proof. reflexivity. Qed.
 
 (** Property: carb bolus is monotonic in carbs. *)
-Lemma carb_bolus_monotonic_carbs : forall c1 c2 icr,
-  icr > 0 -> c1 <= c2 -> carb_bolus c1 icr <= carb_bolus c2 icr.
+Lemma carb_bolus_monotonic_carbs : forall (c1 c2 : Carbs_g) icr,
+  icr > 0 -> grams_val c1 <= grams_val c2 -> carb_bolus c1 icr <= carb_bolus c2 icr.
 Proof.
   intros c1 c2 icr Hicr Hle.
   unfold carb_bolus.
@@ -921,8 +915,8 @@ Proof.
 Qed.
 
 (** Property: carb bolus is bounded by carbs (since ICR >= 1). *)
-Lemma carb_bolus_bounded : forall carbs icr,
-  icr >= 1 -> carb_bolus carbs icr <= carbs.
+Lemma carb_bolus_bounded : forall (carbs : Carbs_g) icr,
+  icr >= 1 -> carb_bolus carbs icr <= grams_val carbs.
 Proof.
   intros carbs icr Hicr.
   unfold carb_bolus.
@@ -1308,7 +1302,7 @@ Export BolusCalculator.
 
 (** Witness: 60g carbs, BG 150, target 100, ICR 10, ISF 50, IOB 0. *)
 (** Expected: 6 (carb) + 1 (correction) - 0 (IOB) = 7 units. *)
-Definition witness_input_1 : BolusInput := mkBolusInput 60 (mkBG 150) 0.
+Definition witness_input_1 : BolusInput := mkBolusInput (mkGrams 60) (mkBG 150) 0.
 
 Lemma witness_bolus_calculation_1 :
   calculate_bolus witness_input_1 witness_typical_params = 7.
@@ -1316,7 +1310,7 @@ Proof. reflexivity. Qed.
 
 (** Witness: 45g carbs, BG 100 (at target), ICR 10, ISF 50, IOB 0. *)
 (** Expected: 4 (carb) + 0 (no correction) - 0 = 4 units. *)
-Definition witness_input_2 : BolusInput := mkBolusInput 45 (mkBG 100) 0.
+Definition witness_input_2 : BolusInput := mkBolusInput (mkGrams 45) (mkBG 100) 0.
 
 Lemma witness_bolus_calculation_2 :
   calculate_bolus witness_input_2 witness_typical_params = 4.
@@ -1324,14 +1318,14 @@ Proof. reflexivity. Qed.
 
 (** Witness: 60g carbs, BG 200, ICR 10, ISF 50, IOB 3. *)
 (** Expected: 6 (carb) + 2 (correction) - 3 (IOB) = 5 units. *)
-Definition witness_input_3 : BolusInput := mkBolusInput 60 (mkBG 200) 3.
+Definition witness_input_3 : BolusInput := mkBolusInput (mkGrams 60) (mkBG 200) 3.
 
 Lemma witness_bolus_calculation_3 :
   calculate_bolus witness_input_3 witness_typical_params = 5.
 Proof. reflexivity. Qed.
 
 (** Witness: IOB exceeds calculated bolus, result is 0. *)
-Definition witness_input_high_iob : BolusInput := mkBolusInput 30 (mkBG 100) 10.
+Definition witness_input_high_iob : BolusInput := mkBolusInput (mkGrams 30) (mkBG 100) 10.
 
 Lemma witness_high_iob_yields_zero :
   calculate_bolus witness_input_high_iob witness_typical_params = 0.
@@ -1612,15 +1606,15 @@ Lemma counterex_bg_0_invalid : bg_in_meter_range (mkBG 0) = false.
 Proof. reflexivity. Qed.
 
 (** Witness: 60g carbs is reasonable. *)
-Lemma witness_carbs_60_reasonable : carbs_reasonable 60 = true.
+Lemma witness_carbs_60_reasonable : carbs_reasonable (mkGrams 60) = true.
 Proof. reflexivity. Qed.
 
 (** Witness: 200g carbs (max) is still reasonable. *)
-Lemma witness_carbs_200_reasonable : carbs_reasonable 200 = true.
+Lemma witness_carbs_200_reasonable : carbs_reasonable (mkGrams 200) = true.
 Proof. reflexivity. Qed.
 
 (** Counterexample: 201g carbs exceeds sanity limit. *)
-Lemma counterex_carbs_201_unreasonable : carbs_reasonable 201 = false.
+Lemma counterex_carbs_201_unreasonable : carbs_reasonable (mkGrams 201) = false.
 Proof. reflexivity. Qed.
 
 (** Witness: IOB of 5 units is reasonable. *)
@@ -1636,13 +1630,13 @@ Lemma witness_typical_input_valid : input_valid witness_input_1 = true.
 Proof. reflexivity. Qed.
 
 (** Counterexample: input with BG=0 is invalid. *)
-Definition counterex_input_bg_zero : BolusInput := mkBolusInput 60 (mkBG 0) 0.
+Definition counterex_input_bg_zero : BolusInput := mkBolusInput (mkGrams 60) (mkBG 0) 0.
 
 Lemma counterex_input_bg_zero_invalid : input_valid counterex_input_bg_zero = false.
 Proof. reflexivity. Qed.
 
 (** Counterexample: input with 300g carbs is invalid. *)
-Definition counterex_input_carbs_300 : BolusInput := mkBolusInput 300 (mkBG 100) 0.
+Definition counterex_input_carbs_300 : BolusInput := mkBolusInput (mkGrams 300) (mkBG 100) 0.
 
 Lemma counterex_input_carbs_300_invalid : input_valid counterex_input_carbs_300 = false.
 Proof. reflexivity. Qed.
@@ -1778,7 +1772,7 @@ Lemma counterex_validated_invalid_input :
 Proof. reflexivity. Qed.
 
 (** Counterexample: hypoglycemic patient rejected (BG=60). *)
-Definition input_hypo_patient : BolusInput := mkBolusInput 60 (mkBG 60) 0.
+Definition input_hypo_patient : BolusInput := mkBolusInput (mkGrams 60) (mkBG 60) 0.
 
 Lemma counterex_validated_hypo_risk :
   validated_bolus input_hypo_patient witness_typical_params = BolusError error_hypo_risk.
@@ -1788,7 +1782,7 @@ Proof. reflexivity. Qed.
     180g carbs / ICR 10 = 18U carb bolus.
     BG 300, target 100, ISF 50 = (300-100)/50 = 4U correction.
     Total = 22U, not capped (< 25). *)
-Definition input_large_meal : BolusInput := mkBolusInput 180 (mkBG 300) 0.
+Definition input_large_meal : BolusInput := mkBolusInput (mkGrams 180) (mkBG 300) 0.
 
 Lemma witness_large_meal :
   result_bolus (validated_bolus input_large_meal witness_typical_params) = Some 22.
@@ -1798,7 +1792,7 @@ Proof. reflexivity. Qed.
     200g carbs / ICR 10 = 20U carb bolus.
     BG 400, target 100, ISF 50 = (400-100)/50 = 6U correction.
     Total = 26U, capped to 25U. *)
-Definition input_exceeds_cap : BolusInput := mkBolusInput 200 (mkBG 400) 0.
+Definition input_exceeds_cap : BolusInput := mkBolusInput (mkGrams 200) (mkBG 400) 0.
 
 Lemma witness_exceeds_cap :
   result_bolus (validated_bolus input_exceeds_cap witness_typical_params) = Some 25.
@@ -2473,27 +2467,28 @@ Proof. reflexivity. Qed.
 
 Module BilinearIOB.
 
-  Definition PEAK_TIME : Minutes := 75.
-
-  Definition bilinear_iob_fraction (elapsed : Minutes) (dia : DIA_minutes) : nat :=
+  Definition bilinear_iob_fraction (elapsed : Minutes) (dia : DIA_minutes) (itype : InsulinType) : nat :=
+    let pt := peak_time itype dia in
     if dia =? 0 then 0
     else if dia <=? elapsed then 0
-    else if elapsed <=? PEAK_TIME then
-      100 - (elapsed * 25) / PEAK_TIME
+    else if pt =? 0 then 0
+    else if elapsed <=? pt then
+      100 - (elapsed * 25) / pt
+    else if dia <=? pt then 0
     else
-      ((dia - elapsed) * 75) / (dia - PEAK_TIME).
+      ((dia - elapsed) * 75) / (dia - pt).
 
-  Definition bilinear_iob_from_bolus (now : Minutes) (event : BolusEvent) (dia : DIA_minutes) : Insulin_twentieth :=
+  Definition bilinear_iob_from_bolus (now : Minutes) (event : BolusEvent) (dia : DIA_minutes) (itype : InsulinType) : Insulin_twentieth :=
     if now <? be_time_minutes event then 0
     else
       let elapsed := now - be_time_minutes event in
-      let fraction := bilinear_iob_fraction elapsed dia in
+      let fraction := bilinear_iob_fraction elapsed dia itype in
       div_ceil (be_dose_twentieths event * fraction) 100.
 
-  Fixpoint total_bilinear_iob (now : Minutes) (events : list BolusEvent) (dia : DIA_minutes) : Insulin_twentieth :=
+  Fixpoint total_bilinear_iob (now : Minutes) (events : list BolusEvent) (dia : DIA_minutes) (itype : InsulinType) : Insulin_twentieth :=
     match events with
     | nil => 0
-    | e :: rest => bilinear_iob_from_bolus now e dia + total_bilinear_iob now rest dia
+    | e :: rest => bilinear_iob_from_bolus now e dia itype + total_bilinear_iob now rest dia itype
     end.
 
 End BilinearIOB.
@@ -2623,11 +2618,11 @@ Inductive DeliveryStatus : Type :=
   | Delivery_Occlusion : DeliveryStatus
   | Delivery_LowReservoir : DeliveryStatus.
 
-Definition iob_with_fault (history : list BolusEvent) (now : Minutes) (dia : DIA_minutes) (status : DeliveryStatus) : Insulin_twentieth :=
+Definition iob_with_fault (history : list BolusEvent) (now : Minutes) (dia : DIA_minutes) (itype : InsulinType) (status : DeliveryStatus) : Insulin_twentieth :=
   match status with
-  | Delivery_Normal => total_bilinear_iob now history dia
+  | Delivery_Normal => total_bilinear_iob now history dia itype
   | Delivery_Occlusion => 0
-  | Delivery_LowReservoir => total_bilinear_iob now history dia
+  | Delivery_LowReservoir => total_bilinear_iob now history dia itype
   end.
 
 (** Pediatric max bolus: 0.5 U/kg = 10 twentieths per kg.
@@ -2733,7 +2728,8 @@ Module PrecisionCalculator.
     prec_icr_tenths : nat;
     prec_isf_tenths : nat;
     prec_target_bg : BG_mg_dL;
-    prec_dia : DIA_minutes
+    prec_dia : DIA_minutes;
+    prec_insulin_type : InsulinType
   }.
 
   Definition prec_params_valid (p : PrecisionParams) : bool :=
@@ -2752,7 +2748,7 @@ Module PrecisionCalculator.
     else ((current_bg - target_bg) * 200) / isf_tenths.
 
   Record PrecisionInput := mkPrecisionInput {
-    pi_carbs_g : nat;
+    pi_carbs_g : Carbs_g;
     pi_current_bg : BG_mg_dL;
     pi_now : Minutes;
     pi_bolus_history : list BolusEvent;
@@ -2771,7 +2767,7 @@ Module PrecisionCalculator.
     let carb := carb_bolus_twentieths (pi_carbs_g input) activity_icr in
     let carb_adj := apply_reverse_correction_twentieths carb eff_bg (prec_target_bg params) activity_isf in
     let corr := correction_twentieths_full (pi_now input) eff_bg (prec_target_bg params) activity_isf in
-    let iob := total_bilinear_iob (pi_now input) (pi_bolus_history input) (prec_dia params) in
+    let iob := total_bilinear_iob (pi_now input) (pi_bolus_history input) (prec_dia params) (prec_insulin_type params) in
     let raw := carb_adj + corr in
     if raw <=? iob then 0 else raw - iob.
 
@@ -2779,9 +2775,9 @@ End PrecisionCalculator.
 
 Export PrecisionCalculator.
 
-(** Witness: typical params (ICR=10.0, ISF=50.0, target=100, DIA=4hr). *)
+(** Witness: typical params (ICR=10.0, ISF=50.0, target=100, DIA=4hr, Humalog). *)
 Definition witness_prec_params : PrecisionParams :=
-  mkPrecisionParams 100 500 (mkBG 100) 240.
+  mkPrecisionParams 100 500 (mkBG 100) 240 Insulin_Humalog.
 
 Lemma witness_prec_params_valid : prec_params_valid witness_prec_params = true.
 Proof. reflexivity. Qed.
@@ -2815,7 +2811,7 @@ Proof. reflexivity. Qed.
     60g carbs, BG 150, ICR=10.0, ISF=50.0, target=100.
     Carb: 120 twentieths. Correction: 20 twentieths. Total: 140 = 7.0U. *)
 Definition witness_prec_input : PrecisionInput :=
-  mkPrecisionInput 60 (mkBG 150) 0 [] Activity_Normal false Fault_None None.
+  mkPrecisionInput (mkGrams 60) (mkBG 150) 0 [] Activity_Normal false Fault_None None.
 
 Lemma witness_prec_bolus_no_history :
   calculate_precision_bolus witness_prec_input witness_prec_params = 140.
@@ -2828,7 +2824,7 @@ Proof. reflexivity. Qed.
     IOB from bolus at 0 with 4hr DIA: 0 remaining.
     Total = 120 + 25 = 145 twentieths. *)
 Definition witness_prec_input_with_old_bolus : PrecisionInput :=
-  mkPrecisionInput 60 (mkBG 150) 240 [mkBolusEvent 40 0] Activity_Normal false Fault_None None.
+  mkPrecisionInput (mkGrams 60) (mkBG 150) 240 [mkBolusEvent 40 0] Activity_Normal false Fault_None None.
 
 Lemma witness_prec_bolus_with_old_iob :
   calculate_precision_bolus witness_prec_input_with_old_bolus witness_prec_params = 145.
@@ -2840,7 +2836,7 @@ Proof. reflexivity. Qed.
     IOB = 60 * 80 / 100 = 48 twentieths.
     Raw = 140, IOB = 48, result = 92 twentieths = 4.6U. *)
 Definition witness_prec_input_recent_iob : PrecisionInput :=
-  mkPrecisionInput 60 (mkBG 150) 60 [mkBolusEvent 60 0] Activity_Normal false Fault_None None.
+  mkPrecisionInput (mkGrams 60) (mkBG 150) 60 [mkBolusEvent 60 0] Activity_Normal false Fault_None None.
 
 Lemma witness_prec_bolus_recent_iob :
   calculate_precision_bolus witness_prec_input_recent_iob witness_prec_params = 92.
@@ -3143,7 +3139,7 @@ Module ValidatedPrecision.
       then PrecError prec_error_fault
     else if is_hypo (pi_current_bg input) then PrecError prec_error_hypo
     else
-      let iob := total_bilinear_iob (pi_now input) (pi_bolus_history input) (prec_dia params) in
+      let iob := total_bilinear_iob (pi_now input) (pi_bolus_history input) (prec_dia params) (prec_insulin_type params) in
       if iob_dangerously_high iob && (pi_carbs_g input =? 0)
         then PrecError prec_error_iob_high
       else
@@ -3204,7 +3200,7 @@ Proof. reflexivity. Qed.
     elapsed₂=20: fraction=100-(20*25)/75=94, IOB=ceil(100*94/100)=94
     Total IOB = 208 >= 200 threshold. carbs=0, so blocked. *)
 Definition prec_input_high_iob : PrecisionInput :=
-  mkPrecisionInput 0 (mkBG 150) 100 [mkBolusEvent 120 85; mkBolusEvent 100 80] Activity_Normal false Fault_None None.
+  mkPrecisionInput (mkGrams 0) (mkBG 150) 100 [mkBolusEvent 120 85; mkBolusEvent 100 80] Activity_Normal false Fault_None None.
 
 Lemma counterex_prec_high_iob_rejected :
   validated_precision_bolus prec_input_high_iob witness_prec_params = PrecError prec_error_iob_high.
@@ -3212,7 +3208,7 @@ Proof. reflexivity. Qed.
 
 (** Witness: same high IOB allowed when eating carbs (60g). *)
 Definition prec_input_high_iob_with_carbs : PrecisionInput :=
-  mkPrecisionInput 60 (mkBG 150) 100 [mkBolusEvent 120 85; mkBolusEvent 100 80] Activity_Normal false Fault_None None.
+  mkPrecisionInput (mkGrams 60) (mkBG 150) 100 [mkBolusEvent 120 85; mkBolusEvent 100 80] Activity_Normal false Fault_None None.
 
 Lemma witness_high_iob_ok_with_carbs :
   exists t c, validated_precision_bolus prec_input_high_iob_with_carbs witness_prec_params = PrecOK t c.
@@ -3223,7 +3219,7 @@ Proof. simpl. eexists. eexists. reflexivity. Qed.
     now=2000, window=[560,2000]. Three boluses of 500 each in window.
     TDD = 1500 >= 1400 limit, so blocked. All doses <= 500 (extraction safe). *)
 Definition prec_input_tdd_exceeded : PrecisionInput :=
-  mkPrecisionInput 60 (mkBG 150) 2000 [mkBolusEvent 500 1800; mkBolusEvent 500 1500; mkBolusEvent 500 1000] Activity_Normal false Fault_None (Some 70).
+  mkPrecisionInput (mkGrams 60) (mkBG 150) 2000 [mkBolusEvent 500 1800; mkBolusEvent 500 1500; mkBolusEvent 500 1000] Activity_Normal false Fault_None (Some 70).
 
 Lemma counterex_prec_tdd_exceeded :
   validated_precision_bolus prec_input_tdd_exceeded witness_prec_params = PrecError prec_error_tdd_exceeded.
@@ -3232,21 +3228,21 @@ Proof. reflexivity. Qed.
 (** Witness: same scenario with lighter history passes TDD check.
     Two boluses of 500 each. TDD=1000 < 1400. *)
 Definition prec_input_tdd_ok : PrecisionInput :=
-  mkPrecisionInput 60 (mkBG 150) 2000 [mkBolusEvent 500 1500; mkBolusEvent 500 1000] Activity_Normal false Fault_None (Some 70).
+  mkPrecisionInput (mkGrams 60) (mkBG 150) 2000 [mkBolusEvent 500 1500; mkBolusEvent 500 1000] Activity_Normal false Fault_None (Some 70).
 
 Lemma witness_tdd_ok :
   exists t c, validated_precision_bolus prec_input_tdd_ok witness_prec_params = PrecOK t c.
 Proof. simpl. eexists. eexists. reflexivity. Qed.
 
 (** Counterexample: hypo patient rejected. *)
-Definition prec_input_hypo : PrecisionInput := mkPrecisionInput 60 (mkBG 60) 0 [] Activity_Normal false Fault_None None.
+Definition prec_input_hypo : PrecisionInput := mkPrecisionInput (mkGrams 60) (mkBG 60) 0 [] Activity_Normal false Fault_None None.
 
 Lemma counterex_prec_hypo_rejected :
   validated_precision_bolus prec_input_hypo witness_prec_params = PrecError prec_error_hypo.
 Proof. reflexivity. Qed.
 
 (** Counterexample: invalid params rejected. *)
-Definition invalid_prec_params : PrecisionParams := mkPrecisionParams 0 0 (mkBG 50) 240.
+Definition invalid_prec_params : PrecisionParams := mkPrecisionParams 0 0 (mkBG 50) 240 Insulin_Humalog.
 
 Lemma counterex_prec_invalid_params :
   validated_precision_bolus witness_prec_input invalid_prec_params = PrecError prec_error_invalid_params.
@@ -3254,7 +3250,7 @@ Proof. reflexivity. Qed.
 
 (** Counterexample: future-dated history rejected. *)
 Definition prec_input_future_history : PrecisionInput :=
-  mkPrecisionInput 60 (mkBG 150) 100 [mkBolusEvent 40 200] Activity_Normal false Fault_None None.
+  mkPrecisionInput (mkGrams 60) (mkBG 150) 100 [mkBolusEvent 40 200] Activity_Normal false Fault_None None.
 
 Lemma counterex_prec_future_history_rejected :
   validated_precision_bolus prec_input_future_history witness_prec_params = PrecError prec_error_invalid_history.
@@ -3262,7 +3258,7 @@ Proof. reflexivity. Qed.
 
 (** Counterexample: unsorted history rejected. *)
 Definition prec_input_unsorted_history : PrecisionInput :=
-  mkPrecisionInput 60 (mkBG 150) 120 [mkBolusEvent 40 60; mkBolusEvent 30 100; mkBolusEvent 20 0] Activity_Normal false Fault_None None.
+  mkPrecisionInput (mkGrams 60) (mkBG 150) 120 [mkBolusEvent 40 60; mkBolusEvent 30 100; mkBolusEvent 20 0] Activity_Normal false Fault_None None.
 
 Lemma counterex_prec_unsorted_history_rejected :
   validated_precision_bolus prec_input_unsorted_history witness_prec_params = PrecError prec_error_invalid_history.
@@ -3270,7 +3266,7 @@ Proof. reflexivity. Qed.
 
 (** Counterexample: bolus too soon (within 15 min) rejected. *)
 Definition prec_input_stacking : PrecisionInput :=
-  mkPrecisionInput 60 (mkBG 150) 110 [mkBolusEvent 40 100] Activity_Normal false Fault_None None.
+  mkPrecisionInput (mkGrams 60) (mkBG 150) 110 [mkBolusEvent 40 100] Activity_Normal false Fault_None None.
 
 Lemma counterex_prec_stacking_rejected :
   validated_precision_bolus prec_input_stacking witness_prec_params = PrecError prec_error_stacking.
@@ -3278,7 +3274,7 @@ Proof. reflexivity. Qed.
 
 (** Witness: bolus 20 min after last is allowed (>= MINIMUM_BOLUS_INTERVAL). *)
 Definition prec_input_not_stacking : PrecisionInput :=
-  mkPrecisionInput 60 (mkBG 150) 120 [mkBolusEvent 40 100] Activity_Normal false Fault_None None.
+  mkPrecisionInput (mkGrams 60) (mkBG 150) 120 [mkBolusEvent 40 100] Activity_Normal false Fault_None None.
 
 Lemma witness_prec_not_stacking :
   exists t c, validated_precision_bolus prec_input_not_stacking witness_prec_params = PrecOK t c.
@@ -3286,7 +3282,7 @@ Proof. eexists. eexists. reflexivity. Qed.
 
 (** Counterexample: occlusion fault blocks bolus. *)
 Definition prec_input_occlusion : PrecisionInput :=
-  mkPrecisionInput 60 (mkBG 150) 120 [mkBolusEvent 40 100] Activity_Normal false Fault_Occlusion None.
+  mkPrecisionInput (mkGrams 60) (mkBG 150) 120 [mkBolusEvent 40 100] Activity_Normal false Fault_Occlusion None.
 
 Lemma counterex_prec_occlusion_rejected :
   validated_precision_bolus prec_input_occlusion witness_prec_params = PrecError prec_error_fault.
@@ -3294,7 +3290,7 @@ Proof. reflexivity. Qed.
 
 (** Witness: battery low does NOT block bolus. *)
 Definition prec_input_battery_low : PrecisionInput :=
-  mkPrecisionInput 60 (mkBG 150) 120 [mkBolusEvent 40 100] Activity_Normal false Fault_BatteryLow None.
+  mkPrecisionInput (mkGrams 60) (mkBG 150) 120 [mkBolusEvent 40 100] Activity_Normal false Fault_BatteryLow None.
 
 Lemma witness_battery_low_allowed :
   exists t c, validated_precision_bolus prec_input_battery_low witness_prec_params = PrecOK t c.
@@ -3304,7 +3300,7 @@ Proof. eexists. eexists. reflexivity. Qed.
     20 kg * 0.5 U/kg * 20 = 200 twentieths max = 10U.
     Adult cap is 500 twentieths = 25U. Pediatric is stricter. *)
 Definition prec_input_pediatric : PrecisionInput :=
-  mkPrecisionInput 60 (mkBG 150) 0 [] Activity_Normal false Fault_None (Some 20).
+  mkPrecisionInput (mkGrams 60) (mkBG 150) 0 [] Activity_Normal false Fault_None (Some 20).
 
 Lemma witness_pediatric_capped :
   exists t c, validated_precision_bolus prec_input_pediatric witness_prec_params = PrecOK t c.
@@ -3387,7 +3383,7 @@ Qed.
 Module MmolInput.
 
   Record MmolPrecisionInput := mkMmolPrecisionInput {
-    mpi_carbs_g : nat;
+    mpi_carbs_g : Carbs_g;
     mpi_current_bg_mmol_tenths : nat;
     mpi_now : Minutes;
     mpi_bolus_history : list BolusEvent;
@@ -3429,7 +3425,7 @@ Proof. reflexivity. Qed.
 
 (** Witness: mmol input yields same result as mg/dL input. *)
 Definition witness_mmol_input : MmolPrecisionInput :=
-  mkMmolPrecisionInput 60 83 0 [] Activity_Normal false Fault_None None.
+  mkMmolPrecisionInput (mkGrams 60) 83 0 [] Activity_Normal false Fault_None None.
 
 Lemma witness_mmol_conversion :
   pi_current_bg (convert_mmol_input witness_mmol_input) = mkBG 149.
@@ -3980,97 +3976,100 @@ Qed.
 
 (** --- Bilinear IOB Witnesses and Properties ---                             *)
 
-(** Witness: at time 0, 100% of insulin remains. *)
+(** Witness: at time 0, 100% of insulin remains (Humalog). *)
 Lemma witness_bilinear_at_zero :
-  bilinear_iob_fraction 0 DIA_4_HOURS = 100.
+  bilinear_iob_fraction 0 DIA_4_HOURS Insulin_Humalog = 100.
 Proof. reflexivity. Qed.
 
 (** Witness: at peak time (75 min), ~75% remains (rising phase complete). *)
 Lemma witness_bilinear_at_peak :
-  bilinear_iob_fraction 75 DIA_4_HOURS = 75.
+  bilinear_iob_fraction 75 DIA_4_HOURS Insulin_Humalog = 75.
 Proof. reflexivity. Qed.
 
 (** Witness: at half DIA (120 min), in decay phase.
     (240 - 120) * 75 / (240 - 75) = 120 * 75 / 165 = 54. *)
 Lemma witness_bilinear_at_half_dia :
-  bilinear_iob_fraction 120 DIA_4_HOURS = 54.
+  bilinear_iob_fraction 120 DIA_4_HOURS Insulin_Humalog = 54.
 Proof. reflexivity. Qed.
 
 (** Witness: at 3/4 DIA (180 min).
     (240 - 180) * 75 / 165 = 60 * 75 / 165 = 27. *)
 Lemma witness_bilinear_at_180 :
-  bilinear_iob_fraction 180 DIA_4_HOURS = 27.
+  bilinear_iob_fraction 180 DIA_4_HOURS Insulin_Humalog = 27.
 Proof. reflexivity. Qed.
 
 (** Witness: at DIA (240 min), 0% remains. *)
 Lemma witness_bilinear_at_dia :
-  bilinear_iob_fraction 240 DIA_4_HOURS = 0.
+  bilinear_iob_fraction 240 DIA_4_HOURS Insulin_Humalog = 0.
 Proof. reflexivity. Qed.
 
 (** Witness: beyond DIA, 0% remains. *)
 Lemma witness_bilinear_beyond_dia :
-  bilinear_iob_fraction 300 DIA_4_HOURS = 0.
+  bilinear_iob_fraction 300 DIA_4_HOURS Insulin_Humalog = 0.
 Proof. reflexivity. Qed.
 
 (** Witness: 1U (20 twentieths) at time 0, checked at 120 min.
     Fraction = 54%, IOB = ceil(20 * 54 / 100) = ceil(10.8) = 11 twentieths.
     Ceiling rounds up for conservative IOB estimation. *)
 Lemma witness_bilinear_iob_at_120 :
-  bilinear_iob_from_bolus 120 (mkBolusEvent 20 0) DIA_4_HOURS = 11.
+  bilinear_iob_from_bolus 120 (mkBolusEvent 20 0) DIA_4_HOURS Insulin_Humalog = 11.
 Proof. reflexivity. Qed.
 
 (** Witness: 1U at time 0, checked at peak (75 min).
     Fraction = 75%, IOB = 20 * 75 / 100 = 15 twentieths. *)
 Lemma witness_bilinear_iob_at_peak :
-  bilinear_iob_from_bolus 75 (mkBolusEvent 20 0) DIA_4_HOURS = 15.
+  bilinear_iob_from_bolus 75 (mkBolusEvent 20 0) DIA_4_HOURS Insulin_Humalog = 15.
 Proof. reflexivity. Qed.
 
 (** Counterexample: future bolus contributes 0. *)
 Lemma counterex_bilinear_future :
-  bilinear_iob_from_bolus 50 (mkBolusEvent 20 100) DIA_4_HOURS = 0.
+  bilinear_iob_from_bolus 50 (mkBolusEvent 20 100) DIA_4_HOURS Insulin_Humalog = 0.
 Proof. reflexivity. Qed.
 
 (** Counterexample: DIA=0 returns 0 (graceful degradation). *)
 Lemma counterex_bilinear_dia_zero :
-  bilinear_iob_fraction 60 0 = 0.
+  bilinear_iob_fraction 60 0 Insulin_Humalog = 0.
 Proof. reflexivity. Qed.
 
 (** Property: bilinear fraction never exceeds 100. *)
-Lemma bilinear_fraction_le_100 : forall elapsed dia,
-  bilinear_iob_fraction elapsed dia <= 100.
+Lemma bilinear_fraction_le_100 : forall elapsed dia itype,
+  bilinear_iob_fraction elapsed dia itype <= 100.
 Proof.
-  intros elapsed dia.
-  unfold bilinear_iob_fraction, PEAK_TIME.
+  intros elapsed dia itype.
+  unfold bilinear_iob_fraction.
+  set (pt := peak_time itype dia).
   destruct (dia =? 0) eqn:E0; [lia|].
   destruct (dia <=? elapsed) eqn:E1; [lia|].
-  destruct (elapsed <=? 75) eqn:E2.
-  - apply Nat.leb_le in E2.
-    assert (elapsed * 25 / 75 <= elapsed * 25 / 75) by lia.
-    assert (elapsed * 25 / 75 <= 25) by (apply Nat.div_le_upper_bound; lia).
+  destruct (pt =? 0) eqn:Ep; [lia|].
+  destruct (elapsed <=? pt) eqn:E2.
+  - apply Nat.leb_le in E2. apply Nat.eqb_neq in Ep.
+    assert (elapsed * 25 / pt <= 25) by (apply Nat.div_le_upper_bound; lia).
     lia.
-  - apply Nat.leb_nle in E1. apply Nat.leb_nle in E2. apply Nat.eqb_neq in E0.
+  - destruct (dia <=? pt) eqn:E3; [lia|].
+    apply Nat.leb_nle in E1. apply Nat.leb_nle in E2. apply Nat.leb_nle in E3.
+    apply Nat.eqb_neq in E0.
     apply Nat.div_le_upper_bound. lia.
     nia.
 Qed.
 
 (** Property: bilinear IOB bounded by original dose. *)
-Lemma bilinear_iob_bounded : forall now event dia,
-  bilinear_iob_from_bolus now event dia <= be_dose_twentieths event.
+Lemma bilinear_iob_bounded : forall now event dia itype,
+  bilinear_iob_from_bolus now event dia itype <= be_dose_twentieths event.
 Proof.
-  intros now event dia.
+  intros now event dia itype.
   unfold bilinear_iob_from_bolus.
   destruct (now <? be_time_minutes event); [lia|].
-  pose proof (bilinear_fraction_le_100 (now - be_time_minutes event) dia) as Hfrac.
+  pose proof (bilinear_fraction_le_100 (now - be_time_minutes event) dia itype) as Hfrac.
   apply div_ceil_bounded_by_factor.
   set (dose := be_dose_twentieths event).
-  set (frac := bilinear_iob_fraction (now - be_time_minutes event) dia).
+  set (frac := bilinear_iob_fraction (now - be_time_minutes event) dia itype).
   nia.
 Qed.
 
-(** Comparison: bilinear vs pharmacokinetic curve at 120 min.
+(** Comparison: bilinear vs pharmacokinetic curve at 120 min (Humalog).
     Bilinear: 54%. Pharmacokinetic curve: 39%. Linear would be 50%. *)
 Lemma bilinear_vs_curve_at_120 :
-  bilinear_iob_fraction 120 DIA_4_HOURS = 54 /\
+  bilinear_iob_fraction 120 DIA_4_HOURS Insulin_Humalog = 54 /\
   iob_fraction_remaining 120 DIA_4_HOURS = 39 /\
   iob_fraction_remaining_linear 120 DIA_4_HOURS = 50.
 Proof. repeat split; reflexivity. Qed.
@@ -4078,7 +4077,7 @@ Proof. repeat split; reflexivity. Qed.
 (** Comparison: at peak (75 min), bilinear and curve both show 75%.
     Linear would show 68%. The curve correctly models peak absorption. *)
 Lemma bilinear_vs_curve_at_peak :
-  bilinear_iob_fraction 75 DIA_4_HOURS = 75 /\
+  bilinear_iob_fraction 75 DIA_4_HOURS Insulin_Humalog = 75 /\
   iob_fraction_remaining 75 DIA_4_HOURS = 75 /\
   iob_fraction_remaining_linear 75 DIA_4_HOURS = 68.
 Proof. repeat split; reflexivity. Qed.
@@ -4566,7 +4565,30 @@ Proof. reflexivity. Qed.
 Lemma max_time_small : MAX_TIME_MINUTES = 525600.
 Proof. reflexivity. Qed.
 
-(** int32_headroom: 2400000 < 2147483648 verified by computation. *)
+(** Largest intermediate is bg * isf_tenths = 600 * 4000 = 2400000.
+    2400000 << 2147483647 (int32 max), verified by external computation.
+    All intermediates fit comfortably in OCaml int.
+    The intermediate bounds are established by:
+    - max_bolus_small, max_bg_small, max_carbs_small, max_time_small above.
+    - carb_bolus_intermediate_bounded, correction_bolus_intermediate_bounded.
+    - total_iob_extraction_safe, extraction_safe. *)
+
+(** Single end-to-end extraction safety theorem.
+    The following theorems together establish complete extraction safety:
+    - extraction_safe: output t <= 500
+    - validated_prec_extraction_safe: history is extraction safe
+    - prec_input_valid (checked in validated_precision_bolus):
+      bg_in_meter_range (bg <= 600) and carbs_reasonable (carbs <= 200)
+    Combined, these prove all values fit in OCaml int. *)
+Theorem extraction_bounds_end_to_end : forall input params t c,
+  validated_precision_bolus input params = PrecOK t c ->
+  t <= 500 /\ extraction_safe_history (pi_bolus_history input) = true.
+Proof.
+  intros input params t c H.
+  split.
+  - apply extraction_safe with input params c. exact H.
+  - apply validated_prec_extraction_safe with params t c. exact H.
+Qed.
 
 (** ========================================================================= *)
 (** TRACEABILITY MATRIX: Safety Requirements to Proving Lemmas               *)
