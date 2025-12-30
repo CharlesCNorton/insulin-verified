@@ -87,8 +87,8 @@ Canonical Structure nat_to_tenths (n : nat) : Tenths := mkTenths n.
 
 Module BloodGlucose.
 
-  Definition BG_mg_dL := nat.
-  Definition BG_mg_dL_wrapped := Mg_dL.
+  Definition BG_mg_dL := Mg_dL.
+  Definition mkBG := mkMg_dL.
 
   Definition BG_LEVEL2_HYPO : nat := 54.
   Definition BG_HYPO : nat := 70.
@@ -137,31 +137,31 @@ Definition is_severe_hyper (bg : BG_mg_dL) : bool := BG_SEVERE_HYPER <? bg.
 Definition is_dka_risk (bg : BG_mg_dL) : bool := BG_DKA_RISK <=? bg.
 
 (** Witness: BG of 50 is severe hypoglycemia. *)
-Lemma witness_50_level2_hypo : is_level2_hypo 50 = true.
+Lemma witness_50_level2_hypo : is_level2_hypo (mkBG 50) = true.
 Proof. reflexivity. Qed.
 
 (** Witness: BG of 50 is also hypoglycemia (less severe includes more severe). *)
-Lemma witness_50_hypo : is_hypo 50 = true.
+Lemma witness_50_hypo : is_hypo (mkBG 50) = true.
 Proof. reflexivity. Qed.
 
 (** Witness: BG of 90 is normal. *)
-Lemma witness_90_normal : is_normal 90 = true.
+Lemma witness_90_normal : is_normal (mkBG 90) = true.
 Proof. reflexivity. Qed.
 
 (** Witness: BG of 200 is hyperglycemia. *)
-Lemma witness_200_hyper : is_hyper 200 = true.
+Lemma witness_200_hyper : is_hyper (mkBG 200) = true.
 Proof. reflexivity. Qed.
 
 (** Witness: BG of 350 is DKA risk. *)
-Lemma witness_350_dka : is_dka_risk 350 = true.
+Lemma witness_350_dka : is_dka_risk (mkBG 350) = true.
 Proof. reflexivity. Qed.
 
 (** Counterexample: BG of 90 is NOT hypoglycemia. *)
-Lemma counterex_90_not_hypo : is_hypo 90 = false.
+Lemma counterex_90_not_hypo : is_hypo (mkBG 90) = false.
 Proof. reflexivity. Qed.
 
 (** Counterexample: BG of 150 is NOT hyperglycemia (it's elevated but not >180). *)
-Lemma counterex_150_not_hyper : is_hyper 150 = false.
+Lemma counterex_150_not_hyper : is_hyper (mkBG 150) = false.
 Proof. reflexivity. Qed.
 
 (** Implication: severe hypo implies hypo. *)
@@ -799,42 +799,42 @@ Proof. unfold ICR_MIN, ICR_MAX, ISF_MIN, ISF_MAX. lia. Qed.
 
 (** Witness: typical Type 1 adult params (ICR=10, ISF=50, target=100). *)
 Definition witness_typical_params : PatientParams :=
-  mkPatientParams 10 50 100.
+  mkPatientParams 10 50 (mkBG 100).
 
 Lemma witness_typical_params_valid : params_valid witness_typical_params = true.
 Proof. reflexivity. Qed.
 
 (** Witness: insulin-sensitive patient (ICR=20, ISF=80, target=100). *)
 Definition witness_sensitive_params : PatientParams :=
-  mkPatientParams 20 80 100.
+  mkPatientParams 20 80 (mkBG 100).
 
 Lemma witness_sensitive_params_valid : params_valid witness_sensitive_params = true.
 Proof. reflexivity. Qed.
 
 (** Witness: insulin-resistant patient (ICR=6, ISF=25, target=100). *)
 Definition witness_resistant_params : PatientParams :=
-  mkPatientParams 6 25 100.
+  mkPatientParams 6 25 (mkBG 100).
 
 Lemma witness_resistant_params_valid : params_valid witness_resistant_params = true.
 Proof. reflexivity. Qed.
 
 (** Counterexample: ICR of 0 is invalid (division by zero). *)
 Definition counterex_zero_icr : PatientParams :=
-  mkPatientParams 0 50 100.
+  mkPatientParams 0 50 (mkBG 100).
 
 Lemma counterex_zero_icr_invalid : params_valid counterex_zero_icr = false.
 Proof. reflexivity. Qed.
 
 (** Counterexample: ISF of 0 is invalid (division by zero). *)
 Definition counterex_zero_isf : PatientParams :=
-  mkPatientParams 10 0 100.
+  mkPatientParams 10 0 (mkBG 100).
 
 Lemma counterex_zero_isf_invalid : params_valid counterex_zero_isf = false.
 Proof. reflexivity. Qed.
 
 (** Counterexample: target BG of 50 is hypoglycemic and invalid. *)
 Definition counterex_hypo_target : PatientParams :=
-  mkPatientParams 10 50 50.
+  mkPatientParams 10 50 (mkBG 50).
 
 Lemma counterex_hypo_target_invalid : params_valid counterex_hypo_target = false.
 Proof. reflexivity. Qed.
@@ -932,31 +932,31 @@ Export CorrectionBolus.
 
 (** Witness: BG 200, target 100, ISF 50 yields 2 units correction. *)
 Lemma witness_correction_200_100_50 :
-  correction_bolus 200 100 50 = 2.
+  correction_bolus (mkBG 200) (mkBG 100) 50 = 2.
 Proof. reflexivity. Qed.
 
 (** Witness: BG 150, target 100, ISF 25 yields 2 units correction. *)
 Lemma witness_correction_150_100_25 :
-  correction_bolus 150 100 25 = 2.
+  correction_bolus (mkBG 150) (mkBG 100) 25 = 2.
 Proof. reflexivity. Qed.
 
 (** Witness: BG at target yields 0 correction. *)
 Lemma witness_correction_at_target :
-  correction_bolus 100 100 50 = 0.
+  correction_bolus (mkBG 100) (mkBG 100) 50 = 0.
 Proof. reflexivity. Qed.
 
 (** Witness: BG below target yields 0 correction (no negative insulin). *)
 Lemma witness_correction_below_target :
-  correction_bolus 80 100 50 = 0.
+  correction_bolus (mkBG 80) (mkBG 100) 50 = 0.
 Proof. reflexivity. Qed.
 
 (** Counterexample: ISF of 0 returns None in safe version. *)
 Lemma counterex_correction_isf_zero :
-  correction_bolus_safe 200 100 0 = None.
+  correction_bolus_safe (mkBG 200) (mkBG 100) 0 = None.
 Proof. reflexivity. Qed.
 
 (** Property: correction is 0 when BG <= target. *)
-Lemma correction_zero_when_at_or_below_target : forall bg target isf,
+Lemma correction_zero_when_at_or_below_target : forall (bg target : BG_mg_dL) isf,
   bg <= target -> correction_bolus bg target isf = 0.
 Proof.
   intros bg target isf Hle.
@@ -967,7 +967,7 @@ Proof.
 Qed.
 
 (** Property: correction is monotonic in BG. *)
-Lemma correction_monotonic_bg : forall bg1 bg2 target isf,
+Lemma correction_monotonic_bg : forall (bg1 bg2 target : BG_mg_dL) isf,
   isf > 0 -> bg1 <= bg2 ->
   correction_bolus bg1 target isf <= correction_bolus bg2 target isf.
 Proof.
@@ -982,7 +982,7 @@ Proof.
 Qed.
 
 (** Property: higher ISF (more sensitive) means less correction. *)
-Lemma correction_antimonotonic_isf : forall bg target isf1 isf2,
+Lemma correction_antimonotonic_isf : forall (bg target : BG_mg_dL) isf1 isf2,
   isf1 > 0 -> isf2 > 0 -> isf1 <= isf2 ->
   correction_bolus bg target isf2 <= correction_bolus bg target isf1.
 Proof.
@@ -1150,7 +1150,7 @@ Module ReverseCorrection.
     else if target_bg <=? current_bg then 0
     else (target_bg - current_bg) / isf.
 
-  Definition apply_reverse_correction (carb_bolus current_bg target_bg : nat) (isf : nat) : nat :=
+  Definition apply_reverse_correction (carb_bolus : nat) (current_bg target_bg : BG_mg_dL) (isf : nat) : nat :=
     let reduction := reverse_correction current_bg target_bg isf in
     if carb_bolus <=? reduction then 0 else carb_bolus - reduction.
 
@@ -1165,7 +1165,7 @@ Module ReverseCorrectionPrecision.
     else if target_bg <=? current_bg then 0
     else ((target_bg - current_bg) * 200) / isf_tenths.
 
-  Definition apply_reverse_correction_twentieths (carb_bolus_tw current_bg target_bg : nat) (isf_tenths : nat) : nat :=
+  Definition apply_reverse_correction_twentieths (carb_bolus_tw : nat) (current_bg target_bg : BG_mg_dL) (isf_tenths : nat) : nat :=
     let reduction := reverse_correction_twentieths current_bg target_bg isf_tenths in
     if carb_bolus_tw <=? reduction then 0 else carb_bolus_tw - reduction.
 
@@ -1175,71 +1175,71 @@ Export ReverseCorrectionPrecision.
 
 (** Witness: BG 80, target 100, ISF 50.0 (500 tenths). Reverse = (100-80)*200/500 = 8 twentieths. *)
 Lemma witness_reverse_prec_80 :
-  reverse_correction_twentieths 80 100 500 = 8.
+  reverse_correction_twentieths (mkBG 80) (mkBG 100) 500 = 8.
 Proof. reflexivity. Qed.
 
 (** Witness: BG 50, target 100, ISF 50.0 (500 tenths). Reverse = (100-50)*200/500 = 20 twentieths = 1U. *)
 Lemma witness_reverse_prec_50 :
-  reverse_correction_twentieths 50 100 500 = 20.
+  reverse_correction_twentieths (mkBG 50) (mkBG 100) 500 = 20.
 Proof. reflexivity. Qed.
 
 (** Witness: BG at target yields no reverse correction. *)
 Lemma witness_reverse_prec_at_target :
-  reverse_correction_twentieths 100 100 500 = 0.
+  reverse_correction_twentieths (mkBG 100) (mkBG 100) 500 = 0.
 Proof. reflexivity. Qed.
 
 (** Witness: BG above target yields no reverse correction. *)
 Lemma witness_reverse_prec_above_target :
-  reverse_correction_twentieths 150 100 500 = 0.
+  reverse_correction_twentieths (mkBG 150) (mkBG 100) 500 = 0.
 Proof. reflexivity. Qed.
 
 (** Witness: BG 80, target 100, ISF 50. Reverse = (100-80)/50 = 0 (integer division). *)
 Lemma witness_reverse_correction_80 :
-  reverse_correction 80 100 50 = 0.
+  reverse_correction (mkBG 80) (mkBG 100) 50 = 0.
 Proof. reflexivity. Qed.
 
 (** Witness: BG 50, target 100, ISF 50. Reverse = (100-50)/50 = 1. *)
 Lemma witness_reverse_correction_50 :
-  reverse_correction 50 100 50 = 1.
+  reverse_correction (mkBG 50) (mkBG 100) 50 = 1.
 Proof. reflexivity. Qed.
 
 (** Witness: BG 60, target 100, ISF 20. Reverse = (100-60)/20 = 2. *)
 Lemma witness_reverse_correction_60 :
-  reverse_correction 60 100 20 = 2.
+  reverse_correction (mkBG 60) (mkBG 100) 20 = 2.
 Proof. reflexivity. Qed.
 
 (** Witness: BG at target yields no reverse correction. *)
 Lemma witness_reverse_at_target :
-  reverse_correction 100 100 50 = 0.
+  reverse_correction (mkBG 100) (mkBG 100) 50 = 0.
 Proof. reflexivity. Qed.
 
 (** Witness: BG above target yields no reverse correction. *)
 Lemma witness_reverse_above_target :
-  reverse_correction 150 100 50 = 0.
+  reverse_correction (mkBG 150) (mkBG 100) 50 = 0.
 Proof. reflexivity. Qed.
 
 (** Counterexample: ISF=0 returns 0 (graceful handling). *)
 Lemma counterex_reverse_isf_zero :
-  reverse_correction 50 100 0 = 0.
+  reverse_correction (mkBG 50) (mkBG 100) 0 = 0.
 Proof. reflexivity. Qed.
 
 (** Witness: apply to carb bolus. 6U carb - 1U reverse = 5U. *)
 Lemma witness_apply_reverse_6_minus_1 :
-  apply_reverse_correction 6 50 100 50 = 5.
+  apply_reverse_correction 6 (mkBG 50) (mkBG 100) 50 = 5.
 Proof. reflexivity. Qed.
 
 (** Witness: reverse exceeds carb bolus, result is 0. *)
 Lemma witness_reverse_exceeds_carb :
-  apply_reverse_correction 2 40 100 20 = 0.
+  apply_reverse_correction 2 (mkBG 40) (mkBG 100) 20 = 0.
 Proof. reflexivity. Qed.
 
 (** Witness: no reverse when BG >= target. *)
 Lemma witness_no_reverse_above_target :
-  apply_reverse_correction 6 150 100 50 = 6.
+  apply_reverse_correction 6 (mkBG 150) (mkBG 100) 50 = 6.
 Proof. reflexivity. Qed.
 
 (** Property: reverse correction is bounded by (target - BG) / ISF. *)
-Lemma reverse_correction_bounded : forall bg target isf,
+Lemma reverse_correction_bounded : forall (bg target : BG_mg_dL) isf,
   isf > 0 -> target > bg ->
   reverse_correction bg target isf <= (target - bg) / isf.
 Proof.
@@ -1289,7 +1289,7 @@ Export BolusCalculator.
 
 (** Witness: 60g carbs, BG 150, target 100, ICR 10, ISF 50, IOB 0. *)
 (** Expected: 6 (carb) + 1 (correction) - 0 (IOB) = 7 units. *)
-Definition witness_input_1 : BolusInput := mkBolusInput 60 150 0.
+Definition witness_input_1 : BolusInput := mkBolusInput 60 (mkBG 150) 0.
 
 Lemma witness_bolus_calculation_1 :
   calculate_bolus witness_input_1 witness_typical_params = 7.
@@ -1297,7 +1297,7 @@ Proof. reflexivity. Qed.
 
 (** Witness: 45g carbs, BG 100 (at target), ICR 10, ISF 50, IOB 0. *)
 (** Expected: 4 (carb) + 0 (no correction) - 0 = 4 units. *)
-Definition witness_input_2 : BolusInput := mkBolusInput 45 100 0.
+Definition witness_input_2 : BolusInput := mkBolusInput 45 (mkBG 100) 0.
 
 Lemma witness_bolus_calculation_2 :
   calculate_bolus witness_input_2 witness_typical_params = 4.
@@ -1305,14 +1305,14 @@ Proof. reflexivity. Qed.
 
 (** Witness: 60g carbs, BG 200, ICR 10, ISF 50, IOB 3. *)
 (** Expected: 6 (carb) + 2 (correction) - 3 (IOB) = 5 units. *)
-Definition witness_input_3 : BolusInput := mkBolusInput 60 200 3.
+Definition witness_input_3 : BolusInput := mkBolusInput 60 (mkBG 200) 3.
 
 Lemma witness_bolus_calculation_3 :
   calculate_bolus witness_input_3 witness_typical_params = 5.
 Proof. reflexivity. Qed.
 
 (** Witness: IOB exceeds calculated bolus, result is 0. *)
-Definition witness_input_high_iob : BolusInput := mkBolusInput 30 100 10.
+Definition witness_input_high_iob : BolusInput := mkBolusInput 30 (mkBG 100) 10.
 
 Lemma witness_high_iob_yields_zero :
   calculate_bolus witness_input_high_iob witness_typical_params = 0.
@@ -1341,14 +1341,14 @@ Qed.
 
 Module HypoglycemiaSafety.
 
-  Definition predicted_bg_after_correction (current_bg target_bg isf : nat) : nat :=
+  Definition predicted_bg_after_correction (current_bg target_bg : BG_mg_dL) (isf : nat) : nat :=
     let corr := correction_bolus current_bg target_bg isf in
     current_bg - corr * isf.
 
-  Definition correction_is_safe (current_bg target_bg isf : nat) : Prop :=
+  Definition correction_is_safe (current_bg target_bg : BG_mg_dL) (isf : nat) : Prop :=
     predicted_bg_after_correction current_bg target_bg isf >= target_bg.
 
-  Definition predicted_bg_at_time (current_bg target_bg isf : nat)
+  Definition predicted_bg_at_time (current_bg target_bg : BG_mg_dL) (isf : nat)
                                    (elapsed_minutes dia_minutes : nat) : nat :=
     if dia_minutes =? 0 then current_bg
     else
@@ -1358,7 +1358,7 @@ Module HypoglycemiaSafety.
       let bg_drop := (corr * isf * fraction_acted) / 100 in
       if current_bg <=? bg_drop then 0 else current_bg - bg_drop.
 
-  Definition predicted_bg_bilinear (current_bg target_bg isf : nat)
+  Definition predicted_bg_bilinear (current_bg target_bg : BG_mg_dL) (isf : nat)
                                     (elapsed_minutes dia_minutes : nat) : nat :=
     if dia_minutes =? 0 then current_bg
     else if dia_minutes <=? elapsed_minutes then
@@ -1380,26 +1380,26 @@ Export HypoglycemiaSafety.
 
 (** Witness: BG 200, target 100, ISF 50. Correction = 2. Predicted = 200 - 100 = 100. *)
 Lemma witness_predicted_bg_200_100_50 :
-  predicted_bg_after_correction 200 100 50 = 100.
+  predicted_bg_after_correction (mkBG 200) (mkBG 100) 50 = 100.
 Proof. reflexivity. Qed.
 
 (** Witness: BG 150, target 100, ISF 50. Correction = 1. Predicted = 150 - 50 = 100. *)
 Lemma witness_predicted_bg_150_100_50 :
-  predicted_bg_after_correction 150 100 50 = 100.
+  predicted_bg_after_correction (mkBG 150) (mkBG 100) 50 = 100.
 Proof. reflexivity. Qed.
 
 (** Witness: BG at target, no correction, predicted = current. *)
 Lemma witness_predicted_bg_at_target :
-  predicted_bg_after_correction 100 100 50 = 100.
+  predicted_bg_after_correction (mkBG 100) (mkBG 100) 50 = 100.
 Proof. reflexivity. Qed.
 
 (** Witness: BG below target, no correction, predicted = current. *)
 Lemma witness_predicted_bg_below_target :
-  predicted_bg_after_correction 80 100 50 = 80.
+  predicted_bg_after_correction (mkBG 80) (mkBG 100) 50 = 80.
 Proof. reflexivity. Qed.
 
 (** Arithmetic safety: floor division cannot subtract more than (current - target). *)
-Theorem correction_arithmetic_bounded : forall current_bg target_bg isf,
+Theorem correction_arithmetic_bounded : forall (current_bg target_bg : BG_mg_dL) isf,
   isf > 0 ->
   target_bg > 0 ->
   predicted_bg_after_correction current_bg target_bg isf >= target_bg \/
@@ -1416,7 +1416,7 @@ Proof.
 Qed.
 
 (** Corollary: If BG >= target and params valid, predicted BG >= target. *)
-Corollary correction_safe_when_above_target : forall current_bg target_bg isf,
+Corollary correction_safe_when_above_target : forall (current_bg target_bg : BG_mg_dL) isf,
   isf > 0 ->
   current_bg >= target_bg ->
   predicted_bg_after_correction current_bg target_bg isf >= target_bg.
@@ -1432,7 +1432,7 @@ Proof.
 Qed.
 
 (** Corollary: With valid params, target >= BG_HYPO, so predicted >= BG_HYPO. *)
-Corollary correction_never_causes_level2_hypo : forall current_bg params,
+Corollary correction_never_causes_level2_hypo : forall (current_bg : BG_mg_dL) params,
   params_valid params = true ->
   current_bg >= pp_target_bg params ->
   predicted_bg_after_correction current_bg (pp_target_bg params) (pp_isf params) >= BG_HYPO.
@@ -1468,7 +1468,7 @@ Proof.
 Qed.
 
 (** When BG <= target, no correction is given, so predicted BG = current BG. *)
-Theorem no_correction_when_at_or_below_target : forall current_bg target_bg isf,
+Theorem no_correction_when_at_or_below_target : forall (current_bg target_bg : BG_mg_dL) isf,
   current_bg <= target_bg ->
   predicted_bg_after_correction current_bg target_bg isf = current_bg.
 Proof.
@@ -1481,65 +1481,65 @@ Qed.
 
 (** Witness: predicted BG at 80 with target 100 is unchanged at 80. *)
 Lemma witness_no_correction_below_target_80 :
-  predicted_bg_after_correction 80 100 50 = 80.
+  predicted_bg_after_correction (mkBG 80) (mkBG 100) 50 = 80.
 Proof. reflexivity. Qed.
 
 (** Counterexample: predicted BG at 200 with target 100 is NOT 200 (gets corrected). *)
 Lemma counterex_correction_applied :
-  predicted_bg_after_correction 200 100 50 <> 200.
+  predicted_bg_after_correction (mkBG 200) (mkBG 100) 50 <> 200.
 Proof. unfold predicted_bg_after_correction, correction_bolus. simpl. lia. Qed.
 
 (** Witness: at time 0, no insulin has acted yet, BG unchanged. *)
 Lemma witness_predicted_bg_at_time_0 :
-  predicted_bg_at_time 200 100 50 0 240 = 200.
+  predicted_bg_at_time (mkBG 200) (mkBG 100) 50 0 240 = 200.
 Proof. reflexivity. Qed.
 
 (** Witness: at half DIA (120 min of 240), 50% of correction has acted.
     Correction = 2U, drop = 2*50*50/100 = 50. Predicted = 200 - 50 = 150. *)
 Lemma witness_predicted_bg_at_half_dia :
-  predicted_bg_at_time 200 100 50 120 240 = 150.
+  predicted_bg_at_time (mkBG 200) (mkBG 100) 50 120 240 = 150.
 Proof. reflexivity. Qed.
 
 (** Witness: at full DIA (240 min), 100% acted. Same as instant prediction. *)
 Lemma witness_predicted_bg_at_full_dia :
-  predicted_bg_at_time 200 100 50 240 240 = 100.
+  predicted_bg_at_time (mkBG 200) (mkBG 100) 50 240 240 = 100.
 Proof. reflexivity. Qed.
 
 (** Witness: beyond DIA, same as full action. *)
 Lemma witness_predicted_bg_beyond_dia :
-  predicted_bg_at_time 200 100 50 300 240 = 100.
+  predicted_bg_at_time (mkBG 200) (mkBG 100) 50 300 240 = 100.
 Proof. reflexivity. Qed.
 
 (** Counterexample: DIA=0 returns current BG (graceful handling). *)
 Lemma counterex_predicted_bg_dia_zero :
-  predicted_bg_at_time 200 100 50 120 0 = 200.
+  predicted_bg_at_time (mkBG 200) (mkBG 100) 50 120 0 = 200.
 Proof. reflexivity. Qed.
 
 (** Witness: bilinear model at time 0, no action yet. *)
 Lemma witness_bilinear_pred_at_0 :
-  predicted_bg_bilinear 200 100 50 0 240 = 200.
+  predicted_bg_bilinear (mkBG 200) (mkBG 100) 50 0 240 = 200.
 Proof. reflexivity. Qed.
 
 (** Witness: bilinear at peak (75 min). Fraction = 75*25/75 = 25%.
     Drop = 2*50*25/100 = 25. Predicted = 200 - 25 = 175. *)
 Lemma witness_bilinear_pred_at_peak :
-  predicted_bg_bilinear 200 100 50 75 240 = 175.
+  predicted_bg_bilinear (mkBG 200) (mkBG 100) 50 75 240 = 175.
 Proof. reflexivity. Qed.
 
 (** Witness: bilinear at 120 min. Fraction = 25 + (45*75/165) = 25 + 20 = 45.
     Drop = 2*50*45/100 = 45. Predicted = 200 - 45 = 155. *)
 Lemma witness_bilinear_pred_at_120 :
-  predicted_bg_bilinear 200 100 50 120 240 = 155.
+  predicted_bg_bilinear (mkBG 200) (mkBG 100) 50 120 240 = 155.
 Proof. reflexivity. Qed.
 
 (** Witness: bilinear at full DIA equals instant prediction. *)
 Lemma witness_bilinear_pred_at_full_dia :
-  predicted_bg_bilinear 200 100 50 240 240 = 100.
+  predicted_bg_bilinear (mkBG 200) (mkBG 100) 50 240 240 = 100.
 Proof. reflexivity. Qed.
 
 (** Counterexample: bilinear with DIA=0 returns current BG. *)
 Lemma counterex_bilinear_pred_dia_zero :
-  predicted_bg_bilinear 200 100 50 120 0 = 200.
+  predicted_bg_bilinear (mkBG 200) (mkBG 100) 50 120 0 = 200.
 Proof. reflexivity. Qed.
 
 (** ========================================================================= *)
@@ -1568,27 +1568,27 @@ End InputValidation.
 Export InputValidation.
 
 (** Witness: BG of 120 is in meter range. *)
-Lemma witness_bg_120_in_range : bg_in_meter_range 120 = true.
+Lemma witness_bg_120_in_range : bg_in_meter_range (mkBG 120) = true.
 Proof. reflexivity. Qed.
 
 (** Witness: BG of 20 (meter minimum) is valid. *)
-Lemma witness_bg_20_valid : bg_in_meter_range 20 = true.
+Lemma witness_bg_20_valid : bg_in_meter_range (mkBG 20) = true.
 Proof. reflexivity. Qed.
 
 (** Witness: BG of 600 (meter maximum) is valid. *)
-Lemma witness_bg_600_valid : bg_in_meter_range 600 = true.
+Lemma witness_bg_600_valid : bg_in_meter_range (mkBG 600) = true.
 Proof. reflexivity. Qed.
 
 (** Counterexample: BG of 19 is below meter range. *)
-Lemma counterex_bg_19_invalid : bg_in_meter_range 19 = false.
+Lemma counterex_bg_19_invalid : bg_in_meter_range (mkBG 19) = false.
 Proof. reflexivity. Qed.
 
 (** Counterexample: BG of 601 is above meter range. *)
-Lemma counterex_bg_601_invalid : bg_in_meter_range 601 = false.
+Lemma counterex_bg_601_invalid : bg_in_meter_range (mkBG 601) = false.
 Proof. reflexivity. Qed.
 
 (** Counterexample: BG of 0 is invalid (meter error or dead patient). *)
-Lemma counterex_bg_0_invalid : bg_in_meter_range 0 = false.
+Lemma counterex_bg_0_invalid : bg_in_meter_range (mkBG 0) = false.
 Proof. reflexivity. Qed.
 
 (** Witness: 60g carbs is reasonable. *)
@@ -1616,13 +1616,13 @@ Lemma witness_typical_input_valid : input_valid witness_input_1 = true.
 Proof. reflexivity. Qed.
 
 (** Counterexample: input with BG=0 is invalid. *)
-Definition counterex_input_bg_zero : BolusInput := mkBolusInput 60 0 0.
+Definition counterex_input_bg_zero : BolusInput := mkBolusInput 60 (mkBG 0) 0.
 
 Lemma counterex_input_bg_zero_invalid : input_valid counterex_input_bg_zero = false.
 Proof. reflexivity. Qed.
 
 (** Counterexample: input with 300g carbs is invalid. *)
-Definition counterex_input_carbs_300 : BolusInput := mkBolusInput 300 100 0.
+Definition counterex_input_carbs_300 : BolusInput := mkBolusInput 300 (mkBG 100) 0.
 
 Lemma counterex_input_carbs_300_invalid : input_valid counterex_input_carbs_300 = false.
 Proof. reflexivity. Qed.
@@ -1762,7 +1762,7 @@ Lemma counterex_validated_invalid_input :
 Proof. reflexivity. Qed.
 
 (** Counterexample: hypoglycemic patient rejected (BG=60). *)
-Definition input_hypo_patient : BolusInput := mkBolusInput 60 60 0.
+Definition input_hypo_patient : BolusInput := mkBolusInput 60 (mkBG 60) 0.
 
 Lemma counterex_validated_hypo_risk :
   validated_bolus input_hypo_patient witness_typical_params = BolusError error_hypo_risk.
@@ -1772,7 +1772,7 @@ Proof. reflexivity. Qed.
     180g carbs / ICR 10 = 18U carb bolus.
     BG 300, target 100, ISF 50 = (300-100)/50 = 4U correction.
     Total = 22U, not capped (< 25). *)
-Definition input_large_meal : BolusInput := mkBolusInput 180 300 0.
+Definition input_large_meal : BolusInput := mkBolusInput 180 (mkBG 300) 0.
 
 Lemma witness_large_meal :
   result_bolus (validated_bolus input_large_meal witness_typical_params) = Some 22.
@@ -1782,7 +1782,7 @@ Proof. reflexivity. Qed.
     200g carbs / ICR 10 = 20U carb bolus.
     BG 400, target 100, ISF 50 = (400-100)/50 = 6U correction.
     Total = 26U, capped to 25U. *)
-Definition input_exceeds_cap : BolusInput := mkBolusInput 200 400 0.
+Definition input_exceeds_cap : BolusInput := mkBolusInput 200 (mkBG 400) 0.
 
 Lemma witness_exceeds_cap :
   result_bolus (validated_bolus input_exceeds_cap witness_typical_params) = Some 25.
@@ -2674,9 +2674,9 @@ Definition CGM_MARGIN_PERCENT : nat := 15.
 
 Definition apply_sensor_margin (bg : BG_mg_dL) (target : BG_mg_dL) : BG_mg_dL :=
   if bg <=? target then bg
-  else (bg * (100 - CGM_MARGIN_PERCENT)) / 100.
+  else mkBG ((bg * (100 - CGM_MARGIN_PERCENT)) / 100).
 
-Lemma sensor_margin_le : forall bg target, apply_sensor_margin bg target <= bg.
+Lemma sensor_margin_le : forall (bg target : BG_mg_dL), apply_sensor_margin bg target <= bg.
 Proof.
   intros bg target.
   unfold apply_sensor_margin, CGM_MARGIN_PERCENT.
@@ -2684,7 +2684,7 @@ Proof.
   apply Nat.div_le_upper_bound; lia.
 Qed.
 
-Lemma sensor_margin_conservative : forall bg target,
+Lemma sensor_margin_conservative : forall (bg target : BG_mg_dL),
   bg > target -> apply_sensor_margin bg target < bg.
 Proof.
   intros bg target Hgt.
@@ -2775,7 +2775,7 @@ Export PrecisionCalculator.
 
 (** Witness: typical params (ICR=10.0, ISF=50.0, target=100, DIA=4hr). *)
 Definition witness_prec_params : PrecisionParams :=
-  mkPrecisionParams 100 500 100 240.
+  mkPrecisionParams 100 500 (mkBG 100) 240.
 
 Lemma witness_prec_params_valid : prec_params_valid witness_prec_params = true.
 Proof. reflexivity. Qed.
@@ -2792,24 +2792,24 @@ Proof. reflexivity. Qed.
 
 (** Witness: BG 200, target 100, ISF=50.0 yields 40 twentieths = 2.0U. *)
 Lemma witness_correction_prec_200 :
-  correction_bolus_twentieths 200 100 500 = 40.
+  correction_bolus_twentieths (mkBG 200) (mkBG 100) 500 = 40.
 Proof. reflexivity. Qed.
 
 (** Witness: BG 150, target 100, ISF=25.0 yields 40 twentieths = 2.0U. *)
 Lemma witness_correction_prec_150 :
-  correction_bolus_twentieths 150 100 250 = 40.
+  correction_bolus_twentieths (mkBG 150) (mkBG 100) 250 = 40.
 Proof. reflexivity. Qed.
 
 (** Witness: BG at target yields 0 correction. *)
 Lemma witness_correction_prec_at_target :
-  correction_bolus_twentieths 100 100 500 = 0.
+  correction_bolus_twentieths (mkBG 100) (mkBG 100) 500 = 0.
 Proof. reflexivity. Qed.
 
 (** Witness: complete calculation with no history.
     60g carbs, BG 150, ICR=10.0, ISF=50.0, target=100.
     Carb: 120 twentieths. Correction: 20 twentieths. Total: 140 = 7.0U. *)
 Definition witness_prec_input : PrecisionInput :=
-  mkPrecisionInput 60 150 0 [] Activity_Normal false Fault_None None.
+  mkPrecisionInput 60 (mkBG 150) 0 [] Activity_Normal false Fault_None None.
 
 Lemma witness_prec_bolus_no_history :
   calculate_precision_bolus witness_prec_input witness_prec_params = 140.
@@ -2822,7 +2822,7 @@ Proof. reflexivity. Qed.
     IOB from bolus at 0 with 4hr DIA: 0 remaining.
     Total = 120 + 25 = 145 twentieths. *)
 Definition witness_prec_input_with_old_bolus : PrecisionInput :=
-  mkPrecisionInput 60 150 240 [mkBolusEvent 40 0] Activity_Normal false Fault_None None.
+  mkPrecisionInput 60 (mkBG 150) 240 [mkBolusEvent 40 0] Activity_Normal false Fault_None None.
 
 Lemma witness_prec_bolus_with_old_iob :
   calculate_precision_bolus witness_prec_input_with_old_bolus witness_prec_params = 145.
@@ -2834,7 +2834,7 @@ Proof. reflexivity. Qed.
     IOB = 60 * 80 / 100 = 48 twentieths.
     Raw = 140, IOB = 48, result = 92 twentieths = 4.6U. *)
 Definition witness_prec_input_recent_iob : PrecisionInput :=
-  mkPrecisionInput 60 150 60 [mkBolusEvent 60 0] Activity_Normal false Fault_None None.
+  mkPrecisionInput 60 (mkBG 150) 60 [mkBolusEvent 60 0] Activity_Normal false Fault_None None.
 
 Lemma witness_prec_bolus_recent_iob :
   calculate_precision_bolus witness_prec_input_recent_iob witness_prec_params = 92.
@@ -2847,7 +2847,7 @@ Proof. reflexivity. Qed.
 
 (** Counterexample: ISF=0 returns 0 (not crash). *)
 Lemma counterex_prec_isf_zero :
-  correction_bolus_twentieths 200 100 0 = 0.
+  correction_bolus_twentieths (mkBG 200) (mkBG 100) 0 = 0.
 Proof. reflexivity. Qed.
 
 (** ========================================================================= *)
@@ -2867,7 +2867,7 @@ Proof.
 Qed.
 
 (** Correction bolus is monotonic in BG. *)
-Lemma correction_bolus_twentieths_monotonic : forall bg1 bg2 target isf,
+Lemma correction_bolus_twentieths_monotonic : forall (bg1 bg2 target : BG_mg_dL) isf,
   isf > 0 -> bg1 <= bg2 ->
   correction_bolus_twentieths bg1 target isf <= correction_bolus_twentieths bg2 target isf.
 Proof.
@@ -2883,7 +2883,7 @@ Proof.
 Qed.
 
 (** Correction is zero when BG at or below target. *)
-Lemma correction_zero_at_target : forall bg target isf,
+Lemma correction_zero_at_target : forall (bg target : BG_mg_dL) isf,
   bg <= target ->
   correction_bolus_twentieths bg target isf = 0.
 Proof.
@@ -2939,7 +2939,7 @@ Export StackingGuard.
 
 Module SuspendBeforeLow.
 
-  Definition SUSPEND_THRESHOLD : BG_mg_dL := 80.
+  Definition SUSPEND_THRESHOLD : BG_mg_dL := mkBG 80.
   Definition PREDICTION_HORIZON : Minutes := 30.
 
   Definition predict_bg_drop (iob_twentieths : Insulin_twentieth) (isf : nat) : nat :=
@@ -2948,14 +2948,14 @@ Module SuspendBeforeLow.
 
   Definition predicted_bg (current_bg : BG_mg_dL) (iob_twentieths : Insulin_twentieth) (isf : nat) : BG_mg_dL :=
     let drop := predict_bg_drop iob_twentieths isf in
-    if current_bg <=? drop then 0 else current_bg - drop.
+    if current_bg <=? drop then mkBG 0 else mkBG (current_bg - drop).
 
   Definition predicted_eventual_bg (current_bg : BG_mg_dL) (iob_twentieths : Insulin_twentieth)
                                     (cob_grams : nat) (isf : nat) : BG_mg_dL :=
     let drop := predict_bg_drop iob_twentieths isf in
     let rise := cob_grams * BG_RISE_PER_GRAM in
     let bg_after_drop := if current_bg <=? drop then 0 else current_bg - drop in
-    bg_after_drop + rise.
+    mkBG (bg_after_drop + rise).
 
   Inductive SuspendDecision : Type :=
     | Suspend_None : SuspendDecision
@@ -3006,7 +3006,7 @@ Definition predict_bg_drop_tenths (iob_twentieths : Insulin_twentieth) (isf_tent
 
 Definition predicted_bg_tenths (current_bg : BG_mg_dL) (iob_twentieths : Insulin_twentieth) (isf_tenths : nat) : BG_mg_dL :=
   let drop := predict_bg_drop_tenths iob_twentieths isf_tenths in
-  if current_bg <=? drop then 0 else current_bg - drop.
+  if current_bg <=? drop then mkBG 0 else mkBG (current_bg - drop).
 
 Definition suspend_check_tenths (current_bg : BG_mg_dL) (iob_twentieths : Insulin_twentieth)
                                  (isf_tenths : nat) (proposed : Insulin_twentieth) : SuspendDecision :=
@@ -3025,7 +3025,7 @@ Definition predicted_eventual_bg_tenths (current_bg : BG_mg_dL) (iob_twentieths 
   let drop := predict_bg_drop_tenths iob_twentieths isf_tenths in
   let rise := cob_grams * BG_RISE_PER_GRAM in
   let bg_after_drop := if current_bg <=? drop then 0 else current_bg - drop in
-  bg_after_drop + rise.
+  mkBG (bg_after_drop + rise).
 
 Definition suspend_check_tenths_with_cob (current_bg : BG_mg_dL) (iob_twentieths : Insulin_twentieth)
                                           (cob_grams : nat) (isf_tenths : nat)
@@ -3050,14 +3050,14 @@ Definition suspend_check_tenths_with_cob (current_bg : BG_mg_dL) (iob_twentieths
     Total insulin = 60 twentieths = 3U. Drop = 60*500/200 = 150 mg/dL.
     Predicted BG = 100 - 150 = 0 (clamped). Withhold. *)
 Lemma witness_suspend_no_cob_withholds :
-  suspend_check_tenths_with_cob 100 40 0 500 20 = Suspend_Withhold.
+  suspend_check_tenths_with_cob (mkBG 100) 40 0 500 20 = Suspend_Withhold.
 Proof. reflexivity. Qed.
 
 (** Witness: WITH 30g COB, same scenario.
     Rise from COB = 30 * 4 = 120 mg/dL.
     Eventual BG = 0 + 120 = 120 mg/dL >= 80. No suspend needed. *)
 Lemma witness_suspend_with_cob_allows :
-  suspend_check_tenths_with_cob 100 40 30 500 20 = Suspend_None.
+  suspend_check_tenths_with_cob (mkBG 100) 40 30 500 20 = Suspend_None.
 Proof. reflexivity. Qed.
 
 (** Counterexample: even with COB, severe hypo still withholds.
@@ -3065,7 +3065,7 @@ Proof. reflexivity. Qed.
     Total = 140. Drop = 140*500/200 = 350. After drop = 0.
     Rise = 40. Eventual = 40 < 54 (LEVEL2_HYPO). Withhold. *)
 Lemma counterex_cob_not_enough_still_withholds :
-  suspend_check_tenths_with_cob 70 100 10 500 40 = Suspend_Withhold.
+  suspend_check_tenths_with_cob (mkBG 70) 100 10 500 40 = Suspend_Withhold.
 Proof. reflexivity. Qed.
 
 (** Witness: COB prevents false suspend at moderate BG.
@@ -3073,12 +3073,12 @@ Proof. reflexivity. Qed.
     Total = 60. Drop = 60*500/200 = 150. After drop = 0.
     Rise = 80. Eventual = 80 >= 80. Allowed. *)
 Lemma witness_cob_prevents_false_suspend :
-  suspend_check_tenths_with_cob 120 20 20 500 40 = Suspend_None.
+  suspend_check_tenths_with_cob (mkBG 120) 20 20 500 40 = Suspend_None.
 Proof. reflexivity. Qed.
 
 (** Counterexample: ISF=0 always withholds (division safety). *)
 Lemma counterex_suspend_isf_zero_withholds :
-  suspend_check_tenths_with_cob 150 0 30 0 20 = Suspend_Withhold.
+  suspend_check_tenths_with_cob (mkBG 150) 0 30 0 20 = Suspend_Withhold.
 Proof. reflexivity. Qed.
 
 (** ========================================================================= *)
@@ -3206,7 +3206,7 @@ Proof. reflexivity. Qed.
     elapsed₂=20: fraction=100-(20*25)/75=94, IOB=ceil(100*94/100)=94
     Total IOB = 208 >= 200 threshold. carbs=0, so blocked. *)
 Definition prec_input_high_iob : PrecisionInput :=
-  mkPrecisionInput 0 150 100 [mkBolusEvent 120 85; mkBolusEvent 100 80] Activity_Normal false Fault_None None.
+  mkPrecisionInput 0 (mkBG 150) 100 [mkBolusEvent 120 85; mkBolusEvent 100 80] Activity_Normal false Fault_None None.
 
 Lemma counterex_prec_high_iob_rejected :
   validated_precision_bolus prec_input_high_iob witness_prec_params = PrecError prec_error_iob_high.
@@ -3214,7 +3214,7 @@ Proof. reflexivity. Qed.
 
 (** Witness: same high IOB allowed when eating carbs (60g). *)
 Definition prec_input_high_iob_with_carbs : PrecisionInput :=
-  mkPrecisionInput 60 150 100 [mkBolusEvent 120 85; mkBolusEvent 100 80] Activity_Normal false Fault_None None.
+  mkPrecisionInput 60 (mkBG 150) 100 [mkBolusEvent 120 85; mkBolusEvent 100 80] Activity_Normal false Fault_None None.
 
 Lemma witness_high_iob_ok_with_carbs :
   exists t c, validated_precision_bolus prec_input_high_iob_with_carbs witness_prec_params = PrecOK t c.
@@ -3225,7 +3225,7 @@ Proof. simpl. eexists. eexists. reflexivity. Qed.
     now=2000, window=[560,2000]. Three boluses of 500 each in window.
     TDD = 1500 >= 1400 limit, so blocked. All doses <= 500 (extraction safe). *)
 Definition prec_input_tdd_exceeded : PrecisionInput :=
-  mkPrecisionInput 60 150 2000 [mkBolusEvent 500 1800; mkBolusEvent 500 1500; mkBolusEvent 500 1000] Activity_Normal false Fault_None (Some 70).
+  mkPrecisionInput 60 (mkBG 150) 2000 [mkBolusEvent 500 1800; mkBolusEvent 500 1500; mkBolusEvent 500 1000] Activity_Normal false Fault_None (Some 70).
 
 Lemma counterex_prec_tdd_exceeded :
   validated_precision_bolus prec_input_tdd_exceeded witness_prec_params = PrecError prec_error_tdd_exceeded.
@@ -3234,21 +3234,21 @@ Proof. reflexivity. Qed.
 (** Witness: same scenario with lighter history passes TDD check.
     Two boluses of 500 each. TDD=1000 < 1400. *)
 Definition prec_input_tdd_ok : PrecisionInput :=
-  mkPrecisionInput 60 150 2000 [mkBolusEvent 500 1500; mkBolusEvent 500 1000] Activity_Normal false Fault_None (Some 70).
+  mkPrecisionInput 60 (mkBG 150) 2000 [mkBolusEvent 500 1500; mkBolusEvent 500 1000] Activity_Normal false Fault_None (Some 70).
 
 Lemma witness_tdd_ok :
   exists t c, validated_precision_bolus prec_input_tdd_ok witness_prec_params = PrecOK t c.
 Proof. simpl. eexists. eexists. reflexivity. Qed.
 
 (** Counterexample: hypo patient rejected. *)
-Definition prec_input_hypo : PrecisionInput := mkPrecisionInput 60 60 0 [] Activity_Normal false Fault_None None.
+Definition prec_input_hypo : PrecisionInput := mkPrecisionInput 60 (mkBG 60) 0 [] Activity_Normal false Fault_None None.
 
 Lemma counterex_prec_hypo_rejected :
   validated_precision_bolus prec_input_hypo witness_prec_params = PrecError prec_error_hypo.
 Proof. reflexivity. Qed.
 
 (** Counterexample: invalid params rejected. *)
-Definition invalid_prec_params : PrecisionParams := mkPrecisionParams 0 500 100 240.
+Definition invalid_prec_params : PrecisionParams := mkPrecisionParams 0 0 (mkBG 50) 240.
 
 Lemma counterex_prec_invalid_params :
   validated_precision_bolus witness_prec_input invalid_prec_params = PrecError prec_error_invalid_params.
@@ -3256,7 +3256,7 @@ Proof. reflexivity. Qed.
 
 (** Counterexample: future-dated history rejected. *)
 Definition prec_input_future_history : PrecisionInput :=
-  mkPrecisionInput 60 150 100 [mkBolusEvent 40 200] Activity_Normal false Fault_None None.
+  mkPrecisionInput 60 (mkBG 150) 100 [mkBolusEvent 40 200] Activity_Normal false Fault_None None.
 
 Lemma counterex_prec_future_history_rejected :
   validated_precision_bolus prec_input_future_history witness_prec_params = PrecError prec_error_invalid_history.
@@ -3264,7 +3264,7 @@ Proof. reflexivity. Qed.
 
 (** Counterexample: unsorted history rejected. *)
 Definition prec_input_unsorted_history : PrecisionInput :=
-  mkPrecisionInput 60 150 120 [mkBolusEvent 40 60; mkBolusEvent 30 100; mkBolusEvent 20 0] Activity_Normal false Fault_None None.
+  mkPrecisionInput 60 (mkBG 150) 120 [mkBolusEvent 40 60; mkBolusEvent 30 100; mkBolusEvent 20 0] Activity_Normal false Fault_None None.
 
 Lemma counterex_prec_unsorted_history_rejected :
   validated_precision_bolus prec_input_unsorted_history witness_prec_params = PrecError prec_error_invalid_history.
@@ -3272,7 +3272,7 @@ Proof. reflexivity. Qed.
 
 (** Counterexample: bolus too soon (within 15 min) rejected. *)
 Definition prec_input_stacking : PrecisionInput :=
-  mkPrecisionInput 60 150 110 [mkBolusEvent 40 100] Activity_Normal false Fault_None None.
+  mkPrecisionInput 60 (mkBG 150) 110 [mkBolusEvent 40 100] Activity_Normal false Fault_None None.
 
 Lemma counterex_prec_stacking_rejected :
   validated_precision_bolus prec_input_stacking witness_prec_params = PrecError prec_error_stacking.
@@ -3280,7 +3280,7 @@ Proof. reflexivity. Qed.
 
 (** Witness: bolus 20 min after last is allowed (>= MINIMUM_BOLUS_INTERVAL). *)
 Definition prec_input_not_stacking : PrecisionInput :=
-  mkPrecisionInput 60 150 120 [mkBolusEvent 40 100] Activity_Normal false Fault_None None.
+  mkPrecisionInput 60 (mkBG 150) 120 [mkBolusEvent 40 100] Activity_Normal false Fault_None None.
 
 Lemma witness_prec_not_stacking :
   exists t c, validated_precision_bolus prec_input_not_stacking witness_prec_params = PrecOK t c.
@@ -3288,7 +3288,7 @@ Proof. eexists. eexists. reflexivity. Qed.
 
 (** Counterexample: occlusion fault blocks bolus. *)
 Definition prec_input_occlusion : PrecisionInput :=
-  mkPrecisionInput 60 150 120 [mkBolusEvent 40 100] Activity_Normal false Fault_Occlusion None.
+  mkPrecisionInput 60 (mkBG 150) 120 [mkBolusEvent 40 100] Activity_Normal false Fault_Occlusion None.
 
 Lemma counterex_prec_occlusion_rejected :
   validated_precision_bolus prec_input_occlusion witness_prec_params = PrecError prec_error_fault.
@@ -3296,7 +3296,7 @@ Proof. reflexivity. Qed.
 
 (** Witness: battery low does NOT block bolus. *)
 Definition prec_input_battery_low : PrecisionInput :=
-  mkPrecisionInput 60 150 120 [mkBolusEvent 40 100] Activity_Normal false Fault_BatteryLow None.
+  mkPrecisionInput 60 (mkBG 150) 120 [mkBolusEvent 40 100] Activity_Normal false Fault_BatteryLow None.
 
 Lemma witness_battery_low_allowed :
   exists t c, validated_precision_bolus prec_input_battery_low witness_prec_params = PrecOK t c.
@@ -3306,7 +3306,7 @@ Proof. eexists. eexists. reflexivity. Qed.
     20 kg * 0.5 U/kg * 20 = 200 twentieths max = 10U.
     Adult cap is 500 twentieths = 25U. Pediatric is stricter. *)
 Definition prec_input_pediatric : PrecisionInput :=
-  mkPrecisionInput 60 150 0 [] Activity_Normal false Fault_None (Some 20).
+  mkPrecisionInput 60 (mkBG 150) 0 [] Activity_Normal false Fault_None (Some 20).
 
 Lemma witness_pediatric_capped :
   exists t c, validated_precision_bolus prec_input_pediatric witness_prec_params = PrecOK t c.
@@ -3400,7 +3400,7 @@ Module MmolInput.
   Definition convert_mmol_input (input : MmolPrecisionInput) : PrecisionInput :=
     mkPrecisionInput
       (mpi_carbs_g input)
-      (mmol_tenths_to_mg_dL (mpi_current_bg_mmol_tenths input))
+      (mkBG (mmol_tenths_to_mg_dL (mpi_current_bg_mmol_tenths input)))
       (mpi_now input)
       (mpi_bolus_history input)
       (mpi_activity input)
@@ -3432,7 +3432,7 @@ Definition witness_mmol_input : MmolPrecisionInput :=
   mkMmolPrecisionInput 60 83 0 [] Activity_Normal false Fault_None None.
 
 Lemma witness_mmol_conversion :
-  pi_current_bg (convert_mmol_input witness_mmol_input) = 149.
+  pi_current_bg (convert_mmol_input witness_mmol_input) = mkBG 149.
 Proof. reflexivity. Qed.
 
 (** ========================================================================= *)
@@ -3909,49 +3909,49 @@ Export PediatricParams.
 
 (** Witness: small child params (ICR=50, ISF=200, weight=20kg, age=5). *)
 Definition witness_small_child : PediatricPatientParams :=
-  mkPediatricPatientParams 50 200 110 20 5.
+  mkPediatricPatientParams 50 200 (mkBG 110) 20 5.
 
 Lemma witness_small_child_valid : peds_params_valid witness_small_child = true.
 Proof. reflexivity. Qed.
 
 (** Witness: insulin-sensitive toddler (ICR=80, ISF=300). *)
 Definition witness_toddler : PediatricPatientParams :=
-  mkPediatricPatientParams 80 300 120 12 2.
+  mkPediatricPatientParams 80 300 (mkBG 120) 12 2.
 
 Lemma witness_toddler_valid : peds_params_valid witness_toddler = true.
 Proof. reflexivity. Qed.
 
 (** Witness: adolescent (ICR=15, ISF=40, similar to adult). *)
 Definition witness_adolescent : PediatricPatientParams :=
-  mkPediatricPatientParams 15 40 100 60 16.
+  mkPediatricPatientParams 15 40 (mkBG 100) 60 16.
 
 Lemma witness_adolescent_valid : peds_params_valid witness_adolescent = true.
 Proof. reflexivity. Qed.
 
 (** Counterexample: adult-range ICR=10 is valid for peds (overlapping range). *)
 Definition witness_peds_adult_overlap : PediatricPatientParams :=
-  mkPediatricPatientParams 10 50 100 45 14.
+  mkPediatricPatientParams 10 50 (mkBG 100) 45 14.
 
 Lemma witness_peds_adult_overlap_valid : peds_params_valid witness_peds_adult_overlap = true.
 Proof. reflexivity. Qed.
 
 (** Counterexample: ICR=0 is invalid. *)
 Definition counterex_peds_zero_icr : PediatricPatientParams :=
-  mkPediatricPatientParams 0 200 110 20 5.
+  mkPediatricPatientParams 0 200 (mkBG 110) 20 5.
 
 Lemma counterex_peds_zero_icr_invalid : peds_params_valid counterex_peds_zero_icr = false.
 Proof. reflexivity. Qed.
 
 (** Counterexample: ISF > 400 is invalid. *)
 Definition counterex_peds_isf_500 : PediatricPatientParams :=
-  mkPediatricPatientParams 50 500 110 20 5.
+  mkPediatricPatientParams 50 500 (mkBG 110) 20 5.
 
 Lemma counterex_peds_isf_500_invalid : peds_params_valid counterex_peds_isf_500 = false.
 Proof. reflexivity. Qed.
 
 (** Counterexample: weight 0 is invalid. *)
 Definition counterex_peds_zero_weight : PediatricPatientParams :=
-  mkPediatricPatientParams 50 200 110 0 5.
+  mkPediatricPatientParams 50 200 (mkBG 110) 0 5.
 
 Lemma counterex_peds_zero_weight_invalid : peds_params_valid counterex_peds_zero_weight = false.
 Proof. reflexivity. Qed.
@@ -4106,50 +4106,50 @@ Proof. repeat split; reflexivity. Qed.
 
 (** Witness: BG 200 (below threshold) uses base ISF unchanged. *)
 Lemma witness_isf_normal_bg :
-  adjusted_isf 200 50 = 50.
+  adjusted_isf (mkBG 200) 50 = 50.
 Proof. reflexivity. Qed.
 
 (** Witness: BG 300 (mild resistance) reduces ISF by 20%. ISF 50 -> 40. *)
 Lemma witness_isf_mild_resistance :
-  adjusted_isf 300 50 = 40.
+  adjusted_isf (mkBG 300) 50 = 40.
 Proof. reflexivity. Qed.
 
 (** Witness: BG 400 (severe resistance) reduces ISF by 40%. ISF 50 -> 30. *)
 Lemma witness_isf_severe_resistance :
-  adjusted_isf 400 50 = 30.
+  adjusted_isf (mkBG 400) 50 = 30.
 Proof. reflexivity. Qed.
 
 (** Witness: correction at BG 200, target 100, ISF 50.
     No resistance: (200-100)/50 = 2 units. *)
 Lemma witness_correction_no_resistance :
-  correction_with_resistance 200 100 50 = 2.
+  correction_with_resistance (mkBG 200) (mkBG 100) 50 = 2.
 Proof. reflexivity. Qed.
 
 (** Witness: correction at BG 300, target 100, ISF 50.
     Mild resistance: effective ISF = 40. (300-100)/40 = 5 units. *)
 Lemma witness_correction_mild_resistance :
-  correction_with_resistance 300 100 50 = 5.
+  correction_with_resistance (mkBG 300) (mkBG 100) 50 = 5.
 Proof. reflexivity. Qed.
 
 (** Witness: correction at BG 400, target 100, ISF 50.
     Severe resistance: effective ISF = 30. (400-100)/30 = 10 units. *)
 Lemma witness_correction_severe_resistance :
-  correction_with_resistance 400 100 50 = 10.
+  correction_with_resistance (mkBG 400) (mkBG 100) 50 = 10.
 Proof. reflexivity. Qed.
 
 (** Counterexample: BG at target yields 0 regardless of resistance. *)
 Lemma counterex_at_target_no_correction :
-  correction_with_resistance 100 100 50 = 0.
+  correction_with_resistance (mkBG 100) (mkBG 100) 50 = 0.
 Proof. reflexivity. Qed.
 
 (** Counterexample: BG below target yields 0. *)
 Lemma counterex_below_target_no_correction :
-  correction_with_resistance 80 100 50 = 0.
+  correction_with_resistance (mkBG 80) (mkBG 100) 50 = 0.
 Proof. reflexivity. Qed.
 
 (** Counterexample: ISF 0 yields 0 (no crash). *)
 Lemma counterex_isf_zero_no_crash :
-  correction_with_resistance 300 100 0 = 0.
+  correction_with_resistance (mkBG 300) (mkBG 100) 0 = 0.
 Proof. reflexivity. Qed.
 
 (** Property: adjusted ISF is always <= base ISF. *)
@@ -4167,40 +4167,40 @@ Qed.
 
 (** Adjusted ISF for minimum clinical ISF (20) at mild resistance: 16. *)
 Lemma witness_adjusted_isf_20_at_300 :
-  adjusted_isf 300 20 = 16.
+  adjusted_isf (mkBG 300) 20 = 16.
 Proof. reflexivity. Qed.
 
 (** Adjusted ISF for typical ISF (50) at severe resistance: 30. *)
 Lemma witness_adjusted_isf_50_at_400 :
-  adjusted_isf 400 50 = 30.
+  adjusted_isf (mkBG 400) 50 = 30.
 Proof. reflexivity. Qed.
 
 (** Resistance correction increases dose vs linear model: witnesses. *)
 Lemma witness_resistance_increases_300 :
-  correction_with_resistance 300 100 50 = 5 /\
-  correction_bolus 300 100 50 = 4.
+  correction_with_resistance (mkBG 300) (mkBG 100) 50 = 5 /\
+  correction_bolus (mkBG 300) (mkBG 100) 50 = 4.
 Proof. split; reflexivity. Qed.
 
 Lemma witness_resistance_increases_400 :
-  correction_with_resistance 400 100 50 = 10 /\
-  correction_bolus 400 100 50 = 6.
+  correction_with_resistance (mkBG 400) (mkBG 100) 50 = 10 /\
+  correction_bolus (mkBG 400) (mkBG 100) 50 = 6.
 Proof. split; reflexivity. Qed.
 
 (** Adversarial: what if BG is exactly at threshold boundary? *)
 Lemma boundary_249_no_adjustment :
-  adjusted_isf 249 50 = 50.
+  adjusted_isf (mkBG 249) 50 = 50.
 Proof. reflexivity. Qed.
 
 Lemma boundary_250_mild_adjustment :
-  adjusted_isf 250 50 = 40.
+  adjusted_isf (mkBG 250) 50 = 40.
 Proof. reflexivity. Qed.
 
 Lemma boundary_349_mild_adjustment :
-  adjusted_isf 349 50 = 40.
+  adjusted_isf (mkBG 349) 50 = 40.
 Proof. reflexivity. Qed.
 
 Lemma boundary_350_severe_adjustment :
-  adjusted_isf 350 50 = 30.
+  adjusted_isf (mkBG 350) 50 = 30.
 Proof. reflexivity. Qed.
 
 (** ========================================================================= *)
@@ -4213,7 +4213,7 @@ Module SensorUncertainty.
   Definition SENSOR_ERROR_PERCENT : nat := 15.
 
   Definition bg_with_margin (bg : BG_mg_dL) (margin_percent : nat) : BG_mg_dL :=
-    bg - (bg * margin_percent) / 100.
+    mkBG (bg - (bg * margin_percent) / 100).
 
   Definition conservative_bg (bg : BG_mg_dL) : BG_mg_dL :=
     bg_with_margin bg SENSOR_ERROR_PERCENT.
@@ -4228,23 +4228,23 @@ Export SensorUncertainty.
 
 (** Witness: 200 mg/dL with 15% margin = 200 - 30 = 170 mg/dL. *)
 Lemma witness_conservative_bg_200 :
-  conservative_bg 200 = 170.
+  conservative_bg (mkBG 200) = mkBG 170.
 Proof. reflexivity. Qed.
 
 (** Witness: 100 mg/dL with 15% margin = 100 - 15 = 85 mg/dL. *)
 Lemma witness_conservative_bg_100 :
-  conservative_bg 100 = 85.
+  conservative_bg (mkBG 100) = mkBG 85.
 Proof. reflexivity. Qed.
 
 (** Witness: conservative correction at BG 200, target 100, ISF 50.
     Conservative BG = 170. Correction = (170-100)/50 = 1 (vs 2 without margin). *)
 Lemma witness_conservative_correction :
-  conservative_correction 200 100 50 = 1.
+  conservative_correction (mkBG 200) (mkBG 100) 50 = 1.
 Proof. reflexivity. Qed.
 
 (** Witness: at BG 150, conservative BG = 127. Correction = (127-100)/50 = 0. *)
 Lemma witness_conservative_near_target :
-  conservative_correction 150 100 50 = 0.
+  conservative_correction (mkBG 150) (mkBG 100) 50 = 0.
 Proof. reflexivity. Qed.
 
 (** Property: conservative BG is always <= actual BG. *)
@@ -4252,7 +4252,8 @@ Lemma conservative_bg_le : forall bg,
   conservative_bg bg <= bg.
 Proof.
   intro bg. unfold conservative_bg, bg_with_margin, SENSOR_ERROR_PERCENT.
-  assert ((bg * 15) / 100 <= bg) by (apply Nat.div_le_upper_bound; lia).
+  simpl.
+  assert ((mg_dL_val bg * 15) / 100 <= mg_dL_val bg) by (apply Nat.div_le_upper_bound; lia).
   lia.
 Qed.
 
@@ -4522,8 +4523,8 @@ Proof.
 Qed.
 
 (** Correction bolus intermediate: (bg - target) * 200. With bg <= 600, max = 120000. *)
-Lemma correction_bolus_intermediate_bounded : forall bg target isf,
-  bg <= 600 -> isf >= 200 ->
+Lemma correction_bolus_intermediate_bounded : forall (bg target : BG_mg_dL) isf,
+  mg_dL_val bg <= 600 -> isf >= 200 ->
   correction_bolus_twentieths bg target isf <= 600.
 Proof.
   intros bg target isf Hbg Hisf.
@@ -4698,12 +4699,12 @@ Proof.
     unfold predicted_eventual_bg_tenths, predict_bg_drop_tenths.
     rewrite Eisf.
     destruct (current_bg <=? (iob + max_dose) * isf / 200) eqn:Edrop.
-    + unfold BG_LEVEL2_HYPO, BG_RISE_PER_GRAM in *. lia.
+    + unfold BG_LEVEL2_HYPO, BG_RISE_PER_GRAM in *. simpl. lia.
     + apply Nat.leb_nle in Edrop.
       apply Nat.ltb_nlt in E1.
       unfold predicted_eventual_bg_tenths, predict_bg_drop_tenths in E1.
       rewrite Eisf in E1.
-      unfold BG_LEVEL2_HYPO, BG_RISE_PER_GRAM in *. lia.
+      unfold BG_LEVEL2_HYPO, BG_RISE_PER_GRAM in *. simpl in *. lia.
   - discriminate.
 Qed.
 
@@ -4726,23 +4727,23 @@ Proof.
   - right. exact Hdel.
   - left.
     unfold predicted_eventual_bg_tenths, predict_bg_drop_tenths.
-    destruct (isf =? 0) eqn:Eisf; [lia|].
+    destruct (isf =? 0) eqn:Eisf; [apply Nat.eqb_eq in Eisf; lia|].
     destruct (current_bg <=? (iob + delivered) * isf / 200) eqn:Edrop.
-    + unfold BG_LEVEL2_HYPO, BG_RISE_PER_GRAM in *. lia.
+    + unfold BG_LEVEL2_HYPO, BG_RISE_PER_GRAM in *. simpl in *. lia.
     + apply Nat.leb_nle in Edrop.
       pose proof (suspend_reduce_implies_bg_safe current_bg iob cob isf proposed max_dose Hisf Hcob Hred) as Hsafe.
       unfold predicted_eventual_bg_tenths, predict_bg_drop_tenths in Hsafe.
       rewrite Eisf in Hsafe.
       destruct (current_bg <=? (iob + max_dose) * isf / 200) eqn:Edrop_max.
       * apply Nat.leb_le in Edrop_max.
-        unfold BG_LEVEL2_HYPO, BG_RISE_PER_GRAM in *. lia.
+        unfold BG_LEVEL2_HYPO, BG_RISE_PER_GRAM in *. simpl in *. lia.
       * apply Nat.leb_nle in Edrop_max.
-        unfold BG_LEVEL2_HYPO, BG_RISE_PER_GRAM in *. lia.
+        unfold BG_LEVEL2_HYPO, BG_RISE_PER_GRAM in *. simpl in *. lia.
 Qed.
 
 (** Witness: suspend_none case preserves safety. *)
 Lemma witness_suspend_none_safe :
-  let current_bg := 150 in
+  let current_bg := mkBG 150 in
   let iob := 20 in
   let cob := 30 in
   let isf := 500 in
@@ -4757,7 +4758,7 @@ Qed.
 
 (** Witness: withhold case results in delivered = 0. *)
 Lemma witness_suspend_withhold_zero :
-  let current_bg := 70 in
+  let current_bg := mkBG 70 in
   let iob := 40 in
   let cob := 0 in
   let isf := 500 in
