@@ -127,9 +127,12 @@ Canonical Structure nat_to_min (n : nat) : Min := mkMin n.
 Canonical Structure nat_to_tenths (n : nat) : Tenths := mkTenths n.
 
 (** ========================================================================= *)
-(** PART I: BLOOD GLUCOSE                                                     *)
-(** Units: mg/dL (US standard). Clinical thresholds per ADA guidelines.       *)
+(** PART I: FOUNDATIONS & PHARMACOKINETICS                                    *)
+(** Unit types, clinical thresholds, rounding policy, carbohydrate model.     *)
 (** ========================================================================= *)
+
+(** --- Blood Glucose ---                                                     *)
+(** Units: mg/dL (US standard). Clinical thresholds per ADA guidelines.       *)
 
 Module BloodGlucose.
 
@@ -219,14 +222,12 @@ Proof.
   rewrite Nat.ltb_lt in *. lia.
 Qed.
 
-(** ========================================================================= *)
-(** PART I-B: ROUNDING POLICY FOR SAFETY-CRITICAL CALCULATIONS                *)
+(** --- Rounding Policy ---                                                   *)
 (** Integer division truncates. For medical safety:                            *)
 (**   - INSULIN DOSES: round DOWN (floor) to prevent hypoglycemia             *)
 (**   - IOB ESTIMATES: round UP (ceil) to be conservative                     *)
 (**   - BG PREDICTIONS: round DOWN to assume worst-case drop                   *)
 (** Nat.div already floors. For ceiling: (a + b - 1) / b.                     *)
-(** ========================================================================= *)
 
 Module RoundingPolicy.
 
@@ -310,10 +311,8 @@ Proof. reflexivity. Qed.
 Lemma witness_exact_div : div_floor 12 3 = 4 /\ div_ceil 12 3 = 4.
 Proof. split; reflexivity. Qed.
 
-(** ========================================================================= *)
-(** PART II: CARBOHYDRATES                                                    *)
+(** --- Carbohydrates ---                                                     *)
 (** Units: grams. Typical meal range 0-150g.                                  *)
-(** ========================================================================= *)
 
 Module Carbohydrates.
 
@@ -352,14 +351,12 @@ Lemma counterex_250g_unreasonable :
   ~ (250 <= CARBS_SANITY_MAX).
 Proof. unfold CARBS_SANITY_MAX. lia. Qed.
 
-(** ========================================================================= *)
-(** PART II-B: CARBOHYDRATE ABSORPTION MODEL                                  *)
+(** --- Carbohydrate Absorption Model ---                                     *)
 (** Carbs don't hit instantly. Absorption time varies by meal composition:    *)
 (**   - Fast carbs (juice, glucose tabs): 30-60 min absorption                *)
 (**   - Medium carbs (bread, rice): 60-120 min absorption                     *)
 (**   - Slow carbs (pizza, high-fat): 180-300 min absorption                  *)
 (** We model COB (carbs-on-board) analogous to IOB.                           *)
-(** ========================================================================= *)
 
 Module CarbAbsorption.
 
@@ -597,9 +594,12 @@ Lemma counterex_highfat_duration : fat_protein_duration 40 30 = 300.
 Proof. reflexivity. Qed.
 
 (** ========================================================================= *)
-(** PART III: INSULIN AND PATIENT PARAMETERS                                  *)
-(** Units: insulin in units (U), ICR in g/U, ISF in mg/dL per U.              *)
+(** PART II: PARAMETERS & SENSITIVITY                                         *)
+(** Insulin parameters, time-of-day adjustments, CGM trend integration.       *)
 (** ========================================================================= *)
+
+(** --- Insulin Parameters ---                                                *)
+(** Units: insulin in units (U), ICR in g/U, ISF in mg/dL per U.              *)
 
 Module InsulinParams.
 
@@ -628,12 +628,10 @@ End InsulinParams.
 
 Export InsulinParams.
 
-(** ========================================================================= *)
-(** PART III-B: TIME-OF-DAY ISF VARIABILITY                                   *)
+(** --- Time-of-Day ISF Variability ---                                       *)
 (** ISF varies 2-3x by time of day due to circadian rhythms.                  *)
 (** Dawn phenomenon: 3-8 AM, insulin resistance increases.                    *)
 (** Source: Bolli GB, "Dawn phenomenon" (1988), Diabetes Care.               *)
-(** ========================================================================= *)
 
 Module ISFVariability.
 
@@ -714,12 +712,10 @@ Proof.
   destruct tod; apply Nat.div_le_mono; lia.
 Qed.
 
-(** ========================================================================= *)
-(** PART III-C: CGM TREND INTEGRATION                                         *)
+(** --- CGM Trend Integration ---                                             *)
 (** Modern pumps adjust boluses based on glucose trend arrows.                *)
 (** Predicts BG 15-30 min ahead and adjusts correction accordingly.           *)
 (** Source: Pettus J, "Glucose Rate of Change" (2019), J Diabetes Sci Tech.  *)
-(** ========================================================================= *)
 
 Module CGMTrend.
 
@@ -886,9 +882,12 @@ Lemma counterex_hypo_target_invalid : params_valid counterex_hypo_target = false
 Proof. reflexivity. Qed.
 
 (** ========================================================================= *)
-(** PART IV: CARB BOLUS CALCULATION                                           *)
-(** Formula: carb_bolus = carbs / ICR                                         *)
+(** PART III: BOLUS CALCULATIONS                                              *)
+(** Core bolus formulas, IOB handling, and hypoglycemia safety.               *)
 (** ========================================================================= *)
+
+(** --- Carb Bolus ---                                                        *)
+(** Formula: carb_bolus = carbs / ICR                                         *)
 
 Module CarbBolus.
 
@@ -957,10 +956,8 @@ Proof.
   apply Nat.div_le_compat_l. split. exact H1. exact Hle.
 Qed.
 
-(** ========================================================================= *)
-(** PART V: CORRECTION BOLUS CALCULATION                                      *)
+(** --- Correction Bolus ---                                                  *)
 (** Formula: correction = (current_bg - target_bg) / ISF, if bg > target.     *)
-(** ========================================================================= *)
 
 Module CorrectionBolus.
 
@@ -1038,10 +1035,8 @@ Proof.
   apply Nat.div_le_compat_l. split. exact H1. exact Hle.
 Qed.
 
-(** ========================================================================= *)
-(** PART VI: INSULIN ON BOARD (IOB)                                           *)
+(** --- Insulin On Board (IOB) ---                                            *)
 (** Active insulin from previous doses, modeled as simple subtraction.        *)
-(** ========================================================================= *)
 
 Module InsulinOnBoard.
 
@@ -1083,12 +1078,10 @@ Lemma iob_subtraction_nonneg : forall bolus iob,
   0 <= subtract_iob bolus iob.
 Proof. intros. lia. Qed.
 
-(** ========================================================================= *)
-(** PART VI-A: EVENTUAL BG PREDICTION                                         *)
+(** --- Eventual BG Prediction ---                                            *)
 (** Predicts BG after IOB and COB effects complete, plus trend projection.    *)
 (** Used by Loop/OpenAPS for smarter bolus decisions.                         *)
 (** Source: OpenAPS oref0 documentation, "Eventual BG" calculation.           *)
-(** ========================================================================= *)
 
 Module EventualBG.
 
@@ -1182,12 +1175,10 @@ Lemma witness_eventual_with_falling_trend :
   eventual_bg_with_trend 100 0 0 50 30 false = 70.
 Proof. reflexivity. Qed.
 
-(** ========================================================================= *)
-(** PART VI-B: REVERSE CORRECTION                                             *)
+(** --- Reverse Correction ---                                                *)
 (** When BG < target, reduce carb bolus by (target - BG) / ISF.               *)
 (** This accounts for the fact that the patient is already low and carbs      *)
 (** alone will raise BG toward target.                                        *)
-(** ========================================================================= *)
 
 Module ReverseCorrection.
 
@@ -1306,10 +1297,8 @@ Proof.
   destruct (carb <=? reverse_correction bg target isf) eqn:E; lia.
 Qed.
 
-(** ========================================================================= *)
-(** PART VII: COMPLETE BOLUS CALCULATOR                                       *)
+(** --- Complete Bolus Calculator ---                                         *)
 (** total_bolus = carb_bolus + correction_bolus - IOB                         *)
-(** ========================================================================= *)
 
 Module BolusCalculator.
 
@@ -1380,10 +1369,8 @@ Proof.
   apply iob_subtraction_bounded.
 Qed.
 
-(** ========================================================================= *)
-(** PART VIII: HYPOGLYCEMIA SAFETY                                            *)
+(** --- Hypoglycemia Safety ---                                               *)
 (** The critical theorem: correction bolus cannot push BG below target.       *)
-(** ========================================================================= *)
 
 Module HypoglycemiaSafety.
 
@@ -1589,9 +1576,12 @@ Lemma counterex_bilinear_pred_dia_zero :
 Proof. reflexivity. Qed.
 
 (** ========================================================================= *)
-(** PART IX: INPUT VALIDATION                                                 *)
-(** Sanity checks on user-provided values before calculation.                 *)
+(** PART IV: VALIDATED CALCULATOR                                             *)
+(** Input validation, safety caps, and the basic validated bolus calculator.  *)
 (** ========================================================================= *)
+
+(** --- Input Validation ---                                                  *)
+(** Sanity checks on user-provided values before calculation.                 *)
 
 Module InputValidation.
 
@@ -1673,10 +1663,8 @@ Definition counterex_input_carbs_300 : BolusInput := mkBolusInput 300 (mkBG 100)
 Lemma counterex_input_carbs_300_invalid : input_valid counterex_input_carbs_300 = false.
 Proof. reflexivity. Qed.
 
-(** ========================================================================= *)
-(** PART X: BOLUS SANITY CAP                                                  *)
+(** --- Bolus Sanity Cap ---                                                  *)
 (** No single bolus should ever exceed BOLUS_SANITY_MAX (25 units).           *)
-(** ========================================================================= *)
 
 Module BolusCap.
 
@@ -1740,10 +1728,8 @@ Proof.
   - apply Nat.leb_nle in E. lia.
 Qed.
 
-(** ========================================================================= *)
-(** PART XI: FULLY VALIDATED BOLUS CALCULATOR                                 *)
+(** --- Fully Validated Bolus Calculator ---                                  *)
 (** Combines all safety checks into one validated computation.                *)
-(** ========================================================================= *)
 
 Module ValidatedCalculator.
 
@@ -1834,9 +1820,7 @@ Lemma witness_exceeds_cap :
   result_bolus (validated_bolus input_exceeds_cap witness_typical_params) = Some 25.
 Proof. reflexivity. Qed.
 
-(** ========================================================================= *)
-(** PART XII: SYSTEM INVARIANTS                                               *)
-(** ========================================================================= *)
+(** --- System Invariants ---                                                 *)
 
 (** Output is bounded by BOLUS_SANITY_MAX on all successful computations. *)
 Theorem validated_bolus_bounded : forall input params n c,
@@ -1907,11 +1891,15 @@ Proof.
 Qed.
 
 (** ========================================================================= *)
-(** PART XIII: UNIT CONVERSION (mg/dL <-> mmol/L)                             *)
+(** PART V: PRECISION CALCULATOR                                              *)
+(** Fixed-point arithmetic, IOB decay models, precision bolus calculator,     *)
+(** advanced safety systems, pediatric limits, and all supporting features.   *)
+(** ========================================================================= *)
+
+(** --- Unit Conversion (mg/dL <-> mmol/L) ---                                *)
 (** Conversion factor: 1 mmol/L = 18.0182 mg/dL (molar mass glucose 180.16).  *)
 (** We use tenths of mmol/L: 10 = 1.0 mmol/L, 39 = 3.9 mmol/L, 100 = 10 mmol/L*)
 (** This matches the MmolInput module and provides 0.1 mmol/L precision.      *)
-(** ========================================================================= *)
 
 Module UnitConversion.
 
@@ -2072,11 +2060,9 @@ Proof.
   - apply mg_mmol_mg_upper_bound.
 Qed.
 
-(** ========================================================================= *)
-(** PART XIV: FIXED-POINT INSULIN ARITHMETIC                                  *)
+(** --- Fixed-Point Insulin Arithmetic ---                                    *)
 (** Insulin pumps deliver in 0.05U increments. We represent doses as          *)
 (** twentieths of a unit: 1 = 0.05U, 20 = 1.0U, 100 = 5.0U.                   *)
-(** ========================================================================= *)
 
 Module FixedPointInsulin.
 
@@ -2186,12 +2172,10 @@ Proof.
   rewrite Nat.div_mul. reflexivity. lia.
 Qed.
 
-(** ========================================================================= *)
-(** PART XV: INSULIN-ON-BOARD DECAY MODEL                                     *)
+(** --- Insulin-On-Board Decay Model ---                                      *)
 (** Models active insulin remaining from previous boluses.                    *)
 (** Uses piecewise linear approximation of exponential decay.                 *)
 (** DIA (duration of insulin action) typically 3-5 hours.                     *)
-(** ========================================================================= *)
 
 Module IOBDecay.
 
@@ -2499,11 +2483,9 @@ Lemma witness_empty_sorted :
   history_sorted_desc [] = true.
 Proof. reflexivity. Qed.
 
-(** ========================================================================= *)
-(** PART XV-B: BILINEAR IOB DECAY MODEL                                       *)
+(** --- Bilinear IOB Decay Model ---                                          *)
 (** More accurate than linear: peak action at ~75 min, then decay.            *)
 (** Models rapid-acting insulin (lispro, aspart, glulisine).                  *)
-(** ========================================================================= *)
 
 Module BilinearIOB.
 
@@ -2562,12 +2544,10 @@ Definition icr_activity_modifier (state : ActivityState) : nat :=
   | Activity_Stress => 80
   end.
 
-(** ========================================================================= *)
-(** PART XV-C: NONLINEAR ISF CORRECTION                                       *)
+(** --- Nonlinear ISF Correction ---                                          *)
 (** Above 250 mg/dL, insulin resistance increases. We reduce effective ISF    *)
 (** by 20% for BG 250-350, 40% for BG >350. This increases correction dose.   *)
 (** Source: Walsh et al., "Using Insulin" (2003); clinical consensus.         *)
-(** ========================================================================= *)
 
 Module NonlinearISF.
 
@@ -2741,10 +2721,8 @@ Proof.
     apply Nat.div_lt_upper_bound; lia.
 Qed.
 
-(** ========================================================================= *)
-(** PART XV-B: FAULT STATUS TYPE                                              *)
+(** --- Fault Status Type ---                                                 *)
 (** Defined early so PrecisionInput can include it.                           *)
-(** ========================================================================= *)
 
 Inductive FaultStatus : Type :=
   | Fault_None : FaultStatus
@@ -2762,10 +2740,8 @@ Definition fault_blocks_bolus (f : FaultStatus) : bool :=
   | Fault_Unknown => true
   end.
 
-(** ========================================================================= *)
-(** PART XVI: HIGH-PRECISION BOLUS CALCULATOR                                 *)
+(** --- High-Precision Bolus Calculator ---                                   *)
 (** Uses twentieths representation and integrates bilinear IOB decay.         *)
-(** ========================================================================= *)
 
 Module PrecisionCalculator.
 
@@ -2896,9 +2872,7 @@ Lemma counterex_prec_isf_zero :
   correction_bolus_twentieths (mkBG 200) (mkBG 100) 0 = 0.
 Proof. reflexivity. Qed.
 
-(** ========================================================================= *)
-(** PART XVII: PRECISION CALCULATOR INVARIANTS                                *)
-(** ========================================================================= *)
+(** --- Precision Calculator Invariants ---                                   *)
 
 (** Carb bolus is monotonic in carbs consumed. *)
 Lemma carb_bolus_twentieths_monotonic : forall c1 c2 icr,
@@ -2941,10 +2915,8 @@ Proof.
   - apply Nat.leb_nle in E. lia.
 Qed.
 
-(** ========================================================================= *)
-(** PART XVIII: STACKING GUARD                                                *)
+(** --- Stacking Guard ---                                                    *)
 (** Prevents dangerous insulin stacking by warning when bolusing too soon.    *)
-(** ========================================================================= *)
 
 Module StackingGuard.
 
@@ -2978,10 +2950,8 @@ End StackingGuard.
 
 Export StackingGuard.
 
-(** ========================================================================= *)
-(** PART XVIII-B: SUSPEND-BEFORE-LOW                                          *)
+(** --- Suspend-Before-Low ---                                                *)
 (** Predicts BG trajectory and reduces/withholds dose if hypo is predicted.   *)
-(** ========================================================================= *)
 
 Module SuspendBeforeLow.
 
@@ -3127,9 +3097,7 @@ Lemma counterex_suspend_isf_zero_withholds :
   suspend_check_tenths_with_cob (mkBG 150) 0 30 0 20 = Suspend_Withhold.
 Proof. reflexivity. Qed.
 
-(** ========================================================================= *)
-(** PART XIX: VALIDATED PRECISION CALCULATOR                                  *)
-(** ========================================================================= *)
+(** --- Validated Precision Calculator ---                                    *)
 
 Module ValidatedPrecision.
 
@@ -3426,9 +3394,7 @@ Proof.
   apply negb_false_iff in E. exact E.
 Qed.
 
-(** ========================================================================= *)
-(** PART XIX: MMOL/L INPUT MODE                                               *)
-(** ========================================================================= *)
+(** --- mmol/L Input Mode ---                                                 *)
 
 Module MmolInput.
 
@@ -3481,9 +3447,7 @@ Lemma witness_mmol_conversion :
   pi_current_bg (convert_mmol_input witness_mmol_input) = mkBG 149.
 Proof. reflexivity. Qed.
 
-(** ========================================================================= *)
-(** PART XX: DELIVERY ROUNDING                                                *)
-(** ========================================================================= *)
+(** --- Delivery Rounding ---                                                 *)
 
 Module DeliveryRounding.
 
@@ -3556,9 +3520,7 @@ Proof.
   - unfold round_down_to_unit. apply round_down_le_original. unfold ONE_UNIT. lia.
 Qed.
 
-(** ========================================================================= *)
-(** PART XXI: INVARIANT SUMMARY                                               *)
-(** ========================================================================= *)
+(** --- Invariant Summary ---                                                 *)
 
 (** All boolean predicates are decidable (trivially, since they return bool). *)
 Lemma params_valid_decidable : forall p, {params_valid p = true} + {params_valid p = false}.
@@ -3666,10 +3628,8 @@ Proof.
   - apply Nat.ltb_ge in H. exact H.
 Qed.
 
-(** ========================================================================= *)
-(** PART XXII-B: 24-HOUR TDD ACCUMULATOR                                       *)
+(** --- 24-Hour TDD Accumulator ---                                           *)
 (** Tracks cumulative daily insulin; warns or blocks when approaching limit.  *)
-(** ========================================================================= *)
 
 Module TDDAccumulator.
 
@@ -3800,10 +3760,8 @@ Proof.
   - simpl. rewrite IH. lia.
 Qed.
 
-(** ========================================================================= *)
-(** PART XXII: DELIVERY FAULT DETECTION                                        *)
+(** --- Delivery Fault Detection ---                                          *)
 (** Models occlusion/fault detection and worst-case IOB assumptions.          *)
-(** ========================================================================= *)
 
 Module DeliveryFault.
 
@@ -3906,10 +3864,8 @@ Proof.
   - apply Nat.leb_nle in E. lia.
 Qed.
 
-(** ========================================================================= *)
-(** PART XXIII: PEDIATRIC PARAMETERS                                          *)
+(** --- Pediatric Parameters ---                                              *)
 (** Children have higher ICR (30-50+ g/U) and ISF (100-300+ mg/dL/U).         *)
-(** ========================================================================= *)
 
 Module PediatricParams.
 
@@ -4039,9 +3995,7 @@ Proof.
   - lia.
 Qed.
 
-(** ========================================================================= *)
-(** PART XXIV: BILINEAR IOB WITNESSES AND PROPERTIES                          *)
-(** ========================================================================= *)
+(** --- Bilinear IOB Witnesses and Properties ---                             *)
 
 (** Witness: at time 0, 100% of insulin remains. *)
 Lemma witness_bilinear_at_zero :
@@ -4146,9 +4100,7 @@ Lemma bilinear_vs_curve_at_peak :
   iob_fraction_remaining_linear 75 DIA_4_HOURS = 68.
 Proof. repeat split; reflexivity. Qed.
 
-(** ========================================================================= *)
-(** PART XXV: NONLINEAR ISF WITNESSES AND PROPERTIES                          *)
-(** ========================================================================= *)
+(** --- Nonlinear ISF Witnesses and Properties ---                            *)
 
 (** Witness: BG 200 (below threshold) uses base ISF unchanged. *)
 Lemma witness_isf_normal_bg :
@@ -4249,10 +4201,8 @@ Lemma boundary_350_severe_adjustment :
   adjusted_isf (mkBG 350) 50 = 30.
 Proof. reflexivity. Qed.
 
-(** ========================================================================= *)
-(** PART XXV-B: SENSOR UNCERTAINTY MARGIN                                      *)
+(** --- Sensor Uncertainty Margin ---                                         *)
 (** CGM sensors have +/- 15-20% error. Conservative bolus accounts for this.  *)
-(** ========================================================================= *)
 
 Module SensorUncertainty.
 
@@ -4314,10 +4264,8 @@ Proof.
   apply conservative_bg_le.
 Qed.
 
-(** ========================================================================= *)
-(** PART XXV-C: DAWN PHENOMENON ISF ADJUSTMENT                                 *)
+(** --- Dawn Phenomenon ISF Adjustment ---                                    *)
 (** ISF is typically lower in early morning (4-8 AM) due to hormones.         *)
-(** ========================================================================= *)
 
 Module DawnPhenomenon.
 
@@ -4386,10 +4334,8 @@ Definition fully_adjusted_isf_tenths (minutes : Minutes) (bg : BG_mg_dL) (base_i
   let dawn_adj := dawn_adjusted_isf_tenths minutes base_isf_tenths in
   adjusted_isf_tenths bg dawn_adj.
 
-(** ========================================================================= *)
-(** PART XXV-D: EXERCISE/ILLNESS/STRESS MODIFIERS                              *)
+(** --- Exercise/Illness/Stress Modifiers ---                                 *)
 (** Activity state affects insulin sensitivity.                               *)
-(** ========================================================================= *)
 
 Module ActivityModifiers.
 
@@ -4470,9 +4416,12 @@ Proof.
 Qed.
 
 (** ========================================================================= *)
-(** PART XXVI: EXTRACTION SAFETY BOUNDS                                       *)
-(** Proves all intermediates fit in 63-bit signed int under valid inputs.     *)
+(** PART VI: VERIFICATION & EXTRACTION                                        *)
+(** Safety theorems, extraction bounds, traceability, and OCaml extraction.   *)
 (** ========================================================================= *)
+
+(** --- Extraction Safety Bounds ---                                          *)
+(** Proves all intermediates fit in 63-bit signed int under valid inputs.     *)
 
 Module ExtractionBounds.
 
@@ -4701,15 +4650,11 @@ Proof. reflexivity. Qed.
                                          div_floor_le_ceil
 *)
 
-(** ========================================================================= *)
-(** PART XXVII: EXTRACTION                                                    *)
-(** ========================================================================= *)
+(** --- Traceability Matrix ---                                               *)
 
-(** ========================================================================= *)
-(** PART XXVI: END-TO-END SUSPEND SAFETY THEOREM                             *)
+(** --- End-to-End Suspend Safety Theorem ---                                 *)
 (** If suspend_check_tenths_with_cob returns Suspend_None, then the          *)
 (** predicted eventual BG is at least BG_LEVEL2_HYPO (54 mg/dL).             *)
-(** ========================================================================= *)
 
 Lemma suspend_none_implies_bg_safe : forall current_bg iob cob isf proposed,
   isf > 0 ->
