@@ -42,6 +42,45 @@ Import ListNotations.
 Require Import Lia.
 
 (** ========================================================================= *)
+(** UNIT WRAPPER TYPES                                                        *)
+(** Distinct types prevent unit confusion (e.g., mg/dL vs mmol/L).            *)
+(** Each wrapper contains a nat but is a distinct type.                       *)
+(** Coercions enable seamless use with nat operations.                        *)
+(** ========================================================================= *)
+
+Module UnitTypes.
+
+  Record Mg_dL : Type := mkMg_dL { mg_dL_val : nat }.
+  Record Mmol_tenths : Type := mkMmol_tenths { mmol_tenths_val : nat }.
+  Record Grams : Type := mkGrams { grams_val : nat }.
+  Record Twentieths : Type := mkTwentieths { twentieths_val : nat }.
+  Record Units : Type := mkUnits { units_val : nat }.
+  Record Min : Type := mkMin { min_val : nat }.
+  Record Tenths : Type := mkTenths { tenths_val : nat }.
+
+End UnitTypes.
+
+Export UnitTypes.
+
+(** Coercions TO nat for using wrappers in arithmetic/comparisons. *)
+Coercion mg_dL_val : Mg_dL >-> nat.
+Coercion mmol_tenths_val : Mmol_tenths >-> nat.
+Coercion grams_val : Grams >-> nat.
+Coercion twentieths_val : Twentieths >-> nat.
+Coercion units_val : Units >-> nat.
+Coercion min_val : Min >-> nat.
+Coercion tenths_val : Tenths >-> nat.
+
+(** Coercions FROM nat using canonical structures. *)
+Canonical Structure nat_to_mg_dL (n : nat) : Mg_dL := mkMg_dL n.
+Canonical Structure nat_to_mmol (n : nat) : Mmol_tenths := mkMmol_tenths n.
+Canonical Structure nat_to_grams (n : nat) : Grams := mkGrams n.
+Canonical Structure nat_to_twentieths (n : nat) : Twentieths := mkTwentieths n.
+Canonical Structure nat_to_units (n : nat) : Units := mkUnits n.
+Canonical Structure nat_to_min (n : nat) : Min := mkMin n.
+Canonical Structure nat_to_tenths (n : nat) : Tenths := mkTenths n.
+
+(** ========================================================================= *)
 (** PART I: BLOOD GLUCOSE                                                     *)
 (** Units: mg/dL (US standard). Clinical thresholds per ADA guidelines.       *)
 (** ========================================================================= *)
@@ -49,6 +88,7 @@ Require Import Lia.
 Module BloodGlucose.
 
   Definition BG_mg_dL := nat.
+  Definition BG_mg_dL_wrapped := Mg_dL.
 
   Definition BG_LEVEL2_HYPO : nat := 54.
   Definition BG_HYPO : nat := 70.
