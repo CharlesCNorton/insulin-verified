@@ -2974,6 +2974,13 @@ Module ValidatedPrecision.
   Definition prec_error_invalid_time : nat := 5.
   Definition prec_error_stacking : nat := 6.
   Definition prec_error_fault : nat := 7.
+  Definition prec_error_tdd_exceeded : nat := 8.
+  Definition prec_error_iob_high : nat := 9.
+
+  Definition IOB_HIGH_THRESHOLD_TWENTIETHS : nat := 200.
+
+  Definition iob_dangerously_high (iob : Insulin_twentieth) : bool :=
+    IOB_HIGH_THRESHOLD_TWENTIETHS <=? iob.
 
   Definition validated_precision_bolus (input : PrecisionInput) (params : PrecisionParams) : PrecisionResult :=
     if negb (prec_params_valid params) then PrecError prec_error_invalid_params
@@ -2989,17 +2996,31 @@ Module ValidatedPrecision.
       then PrecError prec_error_fault
     else if is_hypo (pi_current_bg input) then PrecError prec_error_hypo
     else
-      let raw := calculate_precision_bolus input params in
       let iob := total_bilinear_iob (pi_now input) (pi_bolus_history input) (prec_dia params) in
-      let suspend_decision := suspend_check_tenths_with_cob (pi_current_bg input) iob (pi_carbs_g input) (prec_isf_tenths params) raw in
-      let suspended := apply_suspend raw suspend_decision in
-      let adult_capped := cap_twentieths suspended in
-      let capped := match pi_weight_kg input with
-                    | None => adult_capped
-                    | Some w => cap_pediatric adult_capped w
-                    end in
-      let was_modified := negb (raw =? capped) in
-      PrecOK capped was_modified.
+      if iob_dangerously_high iob && (pi_carbs_g input =? 0)
+        then PrecError prec_error_iob_high
+      else
+        let tdd_current := fold_left (fun acc e =>
+          if ((pi_now input) - 1440 <=? be_time_minutes e) && (be_time_minutes e <=? pi_now input)
+          then acc + be_dose_twentieths e else acc) (pi_bolus_history input) 0 in
+        let tdd_limit := match pi_weight_kg input with
+                         | None => PREC_BOLUS_MAX_TWENTIETHS * 10
+                         | Some w => w * ONE_UNIT
+                         end in
+        if tdd_limit <=? tdd_current then PrecError prec_error_tdd_exceeded
+        else
+          let raw := calculate_precision_bolus input params in
+          let tdd_capped := if raw + tdd_current <=? tdd_limit then raw
+                            else tdd_limit - tdd_current in
+          let suspend_decision := suspend_check_tenths_with_cob (pi_current_bg input) iob (pi_carbs_g input) (prec_isf_tenths params) tdd_capped in
+          let suspended := apply_suspend tdd_capped suspend_decision in
+          let adult_capped := cap_twentieths suspended in
+          let capped := match pi_weight_kg input with
+                        | None => adult_capped
+                        | Some w => cap_pediatric adult_capped w
+                        end in
+          let was_modified := negb (raw =? capped) in
+          PrecOK capped was_modified.
 
   Definition prec_result_twentieths (r : PrecisionResult) : option Insulin_twentieth :=
     match r with
@@ -3029,6 +3050,47 @@ Proof. reflexivity. Qed.
 
 Lemma witness_cap_600 : cap_twentieths 600 = 500.
 Proof. reflexivity. Qed.
+
+(** Counterexample: IOB dangerously high with no carbs rejected.
+    mkBolusEvent takes (dose, time). now=100.
+    Boluses: dose=120 at t=85, dose=100 at t=80.
+    elapsed₁=15: fraction=100-(15*25)/75=95, IOB=ceil(120*95/100)=114
+    elapsed₂=20: fraction=100-(20*25)/75=94, IOB=ceil(100*94/100)=94
+    Total IOB = 208 >= 200 threshold. carbs=0, so blocked. *)
+Definition prec_input_high_iob : PrecisionInput :=
+  mkPrecisionInput 0 150 100 [mkBolusEvent 120 85; mkBolusEvent 100 80] Activity_Normal false Fault_None None.
+
+Lemma counterex_prec_high_iob_rejected :
+  validated_precision_bolus prec_input_high_iob witness_prec_params = PrecError prec_error_iob_high.
+Proof. reflexivity. Qed.
+
+(** Witness: same high IOB allowed when eating carbs (60g). *)
+Definition prec_input_high_iob_with_carbs : PrecisionInput :=
+  mkPrecisionInput 60 150 100 [mkBolusEvent 120 85; mkBolusEvent 100 80] Activity_Normal false Fault_None None.
+
+Lemma witness_high_iob_ok_with_carbs :
+  exists t c, validated_precision_bolus prec_input_high_iob_with_carbs witness_prec_params = PrecOK t c.
+Proof. simpl. eexists. eexists. reflexivity. Qed.
+
+(** Counterexample: TDD exceeded rejected.
+    mkBolusEvent takes (dose, time). 70kg patient: limit = 70 * 20 = 1400 twentieths.
+    now=2000, window=[560,2000]. Bolus: dose=1500 at t=1000 is in window.
+    TDD = 1500 >= 1400 limit, so blocked. *)
+Definition prec_input_tdd_exceeded : PrecisionInput :=
+  mkPrecisionInput 60 150 2000 [mkBolusEvent 1500 1000] Activity_Normal false Fault_None (Some 70).
+
+Lemma counterex_prec_tdd_exceeded :
+  validated_precision_bolus prec_input_tdd_exceeded witness_prec_params = PrecError prec_error_tdd_exceeded.
+Proof. reflexivity. Qed.
+
+(** Witness: same scenario with lighter history passes TDD check.
+    Bolus: dose=1000 at t=1000, TDD=1000 < 1400. *)
+Definition prec_input_tdd_ok : PrecisionInput :=
+  mkPrecisionInput 60 150 2000 [mkBolusEvent 1000 1000] Activity_Normal false Fault_None (Some 70).
+
+Lemma witness_tdd_ok :
+  exists t c, validated_precision_bolus prec_input_tdd_ok witness_prec_params = PrecOK t c.
+Proof. simpl. eexists. eexists. reflexivity. Qed.
 
 (** Counterexample: hypo patient rejected. *)
 Definition prec_input_hypo : PrecisionInput := mkPrecisionInput 60 60 0 [] Activity_Normal false Fault_None None.
@@ -3126,14 +3188,15 @@ Proof.
   destruct (bolus_too_soon (pi_now input) (pi_bolus_history input)); [discriminate|].
   destruct (fault_blocks_bolus (pi_fault input)); [discriminate|].
   destruct (is_hypo (pi_current_bg input)); [discriminate|].
-  inversion H. subst.
-  set (suspended := apply_suspend _ _).
-  set (adult_cap := cap_twentieths suspended).
+  destruct (iob_dangerously_high _ && _); [discriminate|].
+  destruct (_ <=? _) eqn:Etdd; [discriminate|].
   destruct (pi_weight_kg input) eqn:Ew.
-  - apply Nat.le_trans with (m := adult_cap).
+  - injection H as Ht Hc. subst t.
+    eapply Nat.le_trans.
     + apply pediatric_cap_le_input.
     + apply cap_twentieths_bounded.
-  - apply cap_twentieths_bounded.
+  - injection H as Ht Hc. subst t.
+    apply cap_twentieths_bounded.
 Qed.
 
 (** PrecOK implies BG >= 70. *)
@@ -3487,7 +3550,7 @@ Lemma witness_sum_two_boluses :
 Proof. reflexivity. Qed.
 
 (** Witness: TDD check returns OK when well below limit. *)
-Lemma witness_tdd_ok :
+Lemma witness_check_tdd_ok :
   check_tdd 1000 tdd_history_2 1400 = TDD_OK.
 Proof. reflexivity. Qed.
 
