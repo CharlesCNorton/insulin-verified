@@ -20,47 +20,40 @@
 (** ========================================================================= *)
 (** TODO                                                                      *)
 (**                                                                           *)
-(** 1. Future meals nonzero — Return 0 for future meal events in cob_from_meal*)
-(** 2. Redundant match branches — Differentiate fault handling or remove match*)
-(** 3. Coercions defeat types — Remove nat→unit canonical structures          *)
-(** 4. Carbs bypasses wrappers — Define Carbs_g := Grams                      *)
-(** 5. Duplicate activity modifiers — Consolidate to single definition       *)
-(** 6. Peak time ignored — Use peak_time function instead of hardcoded 75    *)
-(** 7. Fault type ignored — Implement distinct logic per fault type          *)
-(** 8. Unjustified halving logic — Document clinical rationale or remove     *)
-(** 9. Phantom lemma reference — Replace with actual lemma name              *)
-(** 10. Nonexistent type reference — Update to PrecError prec_error_stacking *)
-(** 11. Carbs range mismatch — Update comment to match code                  *)
-(** 12. Overflow unproven intermediates — Add theorem bounding intermediates *)
-(** 13. Extraction bounds incomplete — Prove single end-to-end bound theorem *)
-(** 14. ISF zero unproven — Add lemma proving Suspend_Withhold for ISF=0     *)
-(** 15. Pipeline monotonicity missing — Prove increasing inputs increase bolus*)
-(** 16. Suspend_Reduce untested — Add concrete witness exercising branch     *)
-(** 17. Activity boundaries untested — Add witnesses at boundary values      *)
-(** 18. Pediatric exercise untested — Add witness combining both modifiers   *)
-(** 19. Time monotonicity unchecked — Add validation or document assumption  *)
-(** 20. History gaps allowed — Document assumption or add validation         *)
-(** 21. Midnight rollover unproven — Add witness spanning midnight           *)
-(** 22. Clock wraparound unhandled — Add modular arithmetic or document      *)
-(** 23. Sanitization assumptions implicit — Document preconditions in API    *)
-(** 24. Runtime checks missing — Add assertion generation in OCaml           *)
-(** 25. Hardware constraints unmodeled — Add pump-specific constants         *)
-(** 26. Extraction correctness assumed — Document trust assumption           *)
-(** 27. Conversion precision loss — Use higher precision or document error   *)
-(** 28. Truncation loses precision — Consider rationals or wider fixed-point *)
-(** 29. Conversions not invertible — Document acceptable error bounds        *)
-(** 30. IOB model simplified — Implement exponential or prove error bounds   *)
-(** 31. Pharmacokinetics link missing — Cite source or prove error bounds    *)
-(** 32. Mixed insulin unmodeled — Document single-type assumption            *)
-(** 33. Single meal assumed — Document limitation                            *)
-(** 34. Site variability ignored — Document as out-of-scope                  *)
-(** 35. Dawn window hardcoded — Parameterize in PrecisionParams              *)
-(** 36. Static activity percentages — Add time-decay or document             *)
-(** 37. Liveness property missing — Prove existence of inputs yielding PrecOK*)
-(** 38. Deprecated lemmas used — Replace with Div0.* equivalents             *)
-(** 39. Large literals risky — Use of_num_uint notation                      *)
-(** 40. Opaque proofs unnecessary — Change Qed to Defined where needed       *)
-(** 41. Blackbox arithmetic solvers — Add intermediate steps for auditability*)
+(** 1. [DEFERRED] Carbs_g := Grams requires mkGrams at ~50 call sites         *)
+(** 2. [DEFERRED] peak_time requires InsulinType param through IOB pipeline   *)
+(** 3. Nonexistent type reference — Update to PrecError prec_error_stacking   *)
+(** 4. Carbs range mismatch — Update comment to match code                    *)
+(** 5. Overflow unproven intermediates — Add theorem bounding intermediates   *)
+(** 6. Extraction bounds incomplete — Prove single end-to-end bound theorem   *)
+(** 7. ISF zero unproven — Add lemma proving Suspend_Withhold for ISF=0       *)
+(** 8. Pipeline monotonicity missing — Prove increasing inputs increase bolus *)
+(** 9. Suspend_Reduce untested — Add concrete witness exercising branch       *)
+(** 10. Activity boundaries untested — Add witnesses at boundary values       *)
+(** 11. Pediatric exercise untested — Add witness combining both modifiers    *)
+(** 12. Time monotonicity unchecked — Add validation or document assumption   *)
+(** 13. History gaps allowed — Document assumption or add validation          *)
+(** 14. Midnight rollover unproven — Add witness spanning midnight            *)
+(** 15. Clock wraparound unhandled — Add modular arithmetic or document       *)
+(** 16. Sanitization assumptions implicit — Document preconditions in API     *)
+(** 17. Runtime checks missing — Add assertion generation in OCaml            *)
+(** 18. Hardware constraints unmodeled — Add pump-specific constants          *)
+(** 19. Extraction correctness assumed — Document trust assumption            *)
+(** 20. Conversion precision loss — Use higher precision or document error    *)
+(** 21. Truncation loses precision — Consider rationals or wider fixed-point  *)
+(** 22. Conversions not invertible — Document acceptable error bounds         *)
+(** 23. IOB model simplified — Implement exponential or prove error bounds    *)
+(** 24. Pharmacokinetics link missing — Cite source or prove error bounds     *)
+(** 25. Mixed insulin unmodeled — Document single-type assumption             *)
+(** 26. Single meal assumed — Document limitation                             *)
+(** 27. Site variability ignored — Document as out-of-scope                   *)
+(** 28. Dawn window hardcoded — Parameterize in PrecisionParams               *)
+(** 29. Static activity percentages — Add time-decay or document              *)
+(** 30. Liveness property missing — Prove existence of inputs yielding PrecOK *)
+(** 31. Deprecated lemmas used — Replace with Div0.* equivalents              *)
+(** 32. Large literals risky — Use of_num_uint notation                       *)
+(** 33. Opaque proofs unnecessary — Change Qed to Defined where needed        *)
+(** 34. Blackbox arithmetic solvers — Add intermediate steps for auditability *)
 (** ========================================================================= *)
 
 (** ========================================================================= *)
@@ -116,15 +109,6 @@ Coercion twentieths_val : Twentieths >-> nat.
 Coercion units_val : Units >-> nat.
 Coercion min_val : Min >-> nat.
 Coercion tenths_val : Tenths >-> nat.
-
-(** Coercions FROM nat using canonical structures. *)
-Canonical Structure nat_to_mg_dL (n : nat) : Mg_dL := mkMg_dL n.
-Canonical Structure nat_to_mmol (n : nat) : Mmol_tenths := mkMmol_tenths n.
-Canonical Structure nat_to_grams (n : nat) : Grams := mkGrams n.
-Canonical Structure nat_to_twentieths (n : nat) : Twentieths := mkTwentieths n.
-Canonical Structure nat_to_units (n : nat) : Units := mkUnits n.
-Canonical Structure nat_to_min (n : nat) : Min := mkMin n.
-Canonical Structure nat_to_tenths (n : nat) : Tenths := mkTenths n.
 
 (** ========================================================================= *)
 (** PART I: FOUNDATIONS & PHARMACOKINETICS                                    *)
@@ -415,7 +399,7 @@ Module CarbAbsorption.
   }.
 
   Definition cob_from_meal (now : nat) (event : MealEvent) : nat :=
-    if now <? me_time_minutes event then me_carbs_g event
+    if now <? me_time_minutes event then 0
     else
       let elapsed := now - me_time_minutes event in
       let fraction := cob_fraction_remaining elapsed (me_meal_type event) in
@@ -2643,7 +2627,7 @@ Definition iob_with_fault (history : list BolusEvent) (now : Minutes) (dia : DIA
   match status with
   | Delivery_Normal => total_bilinear_iob now history dia
   | Delivery_Occlusion => 0
-  | Delivery_LowReservoir => total_bilinear_iob now history dia / 2
+  | Delivery_LowReservoir => total_bilinear_iob now history dia
   end.
 
 (** Pediatric max bolus: 0.5 U/kg = 10 twentieths per kg.
@@ -3777,16 +3761,16 @@ Module DeliveryFault.
     | _ => true
     end.
 
-  Definition worst_case_iob (history : list BolusEvent) (fault : FaultStatus) : Insulin_twentieth :=
-    match fault with
-    | Fault_Occlusion => sum_doses history
-    | _ => sum_doses history
-    end.
+  Definition worst_case_iob (history : list BolusEvent) : Insulin_twentieth :=
+    sum_doses history.
 
   Definition conservative_iob (now : Minutes) (history : list BolusEvent) (dia : DIA_minutes) (fault : FaultStatus) : Insulin_twentieth :=
     match fault with
     | Fault_Occlusion => sum_doses history
-    | _ => total_iob now history dia
+    | Fault_Unknown => sum_doses history
+    | Fault_LowReservoir _ => sum_doses history
+    | Fault_None => total_iob now history dia
+    | Fault_BatteryLow => total_iob now history dia
     end.
 
   Definition cap_to_reservoir (proposed : Insulin_twentieth) (reservoir : nat) : Insulin_twentieth :=
@@ -3826,14 +3810,9 @@ Lemma witness_unknown_blocks :
   fault_blocks_bolus Fault_Unknown = true.
 Proof. reflexivity. Qed.
 
-(** Witness: occlusion assumes max IOB (conservative for hypoglycemia risk). *)
-Lemma witness_occlusion_max_iob :
-  worst_case_iob tdd_history_2 Fault_Occlusion = 180.
-Proof. reflexivity. Qed.
-
-(** Witness: no fault uses sum of doses. *)
-Lemma witness_no_fault_actual_iob :
-  worst_case_iob tdd_history_2 Fault_None = 180.
+(** Witness: worst case assumes all insulin still active (sum of all doses). *)
+Lemma witness_worst_case_iob :
+  worst_case_iob tdd_history_2 = 180.
 Proof. reflexivity. Qed.
 
 (** Witness: cap to reservoir limits dose. *)
@@ -4343,33 +4322,11 @@ Definition fully_adjusted_isf_tenths (minutes : Minutes) (bg : BG_mg_dL) (base_i
 
 Module ActivityModifiers.
 
-  (** ActivityState defined globally after BilinearIOB export. *)
-
-  Definition icr_modifier (state : ActivityState) : nat :=
-    match state with
-    | Activity_Normal => 100
-    | Activity_LightExercise => 120
-    | Activity_ModerateExercise => 150
-    | Activity_IntenseExercise => 200
-    | Activity_Illness => 80
-    | Activity_Stress => 80
-    end.
-
-  Definition isf_modifier (state : ActivityState) : nat :=
-    match state with
-    | Activity_Normal => 100
-    | Activity_LightExercise => 120
-    | Activity_ModerateExercise => 150
-    | Activity_IntenseExercise => 200
-    | Activity_Illness => 70
-    | Activity_Stress => 70
-    end.
-
   Definition apply_icr_modifier (base_icr : nat) (state : ActivityState) : nat :=
-    (base_icr * icr_modifier state) / 100.
+    (base_icr * icr_activity_modifier state) / 100.
 
   Definition apply_isf_modifier (base_isf : nat) (state : ActivityState) : nat :=
-    (base_isf * isf_modifier state) / 100.
+    (base_isf * isf_activity_modifier state) / 100.
 
 End ActivityModifiers.
 
@@ -4406,7 +4363,7 @@ Lemma exercise_increases_icr : forall base_icr,
   apply_icr_modifier base_icr Activity_ModerateExercise >= base_icr.
 Proof.
   intros base_icr Hpos.
-  unfold apply_icr_modifier, icr_modifier.
+  unfold apply_icr_modifier, icr_activity_modifier.
   apply Nat.div_le_lower_bound. lia. nia.
 Qed.
 
@@ -4415,7 +4372,7 @@ Lemma illness_decreases_isf : forall base_isf,
   apply_isf_modifier base_isf Activity_Illness <= base_isf.
 Proof.
   intro base_isf.
-  unfold apply_isf_modifier, isf_modifier.
+  unfold apply_isf_modifier, isf_activity_modifier.
   apply Nat.div_le_upper_bound. lia. nia.
 Qed.
 
