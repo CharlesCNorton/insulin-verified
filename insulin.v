@@ -180,6 +180,19 @@ Module RoundingPolicy.
     - apply Nat.div_le_mono. lia. lia.
   Qed.
 
+  Lemma div_ceil_ceiling_property : forall a b,
+    b > 0 -> a <= div_ceil a b * b.
+  Proof.
+    intros a b Hb.
+    unfold div_ceil.
+    destruct (b =? 0) eqn:E; [apply Nat.eqb_eq in E; lia|].
+    apply Nat.eqb_neq in E.
+    pose proof (Nat.div_mod (a + b - 1) b E) as Hdiv.
+    pose proof (Nat.mod_upper_bound (a + b - 1) b E) as Hmod.
+    rewrite Nat.mul_comm.
+    lia.
+  Qed.
+
 End RoundingPolicy.
 
 Export RoundingPolicy.
@@ -553,9 +566,12 @@ Module ISFVariability.
     else if hour <? 21 then TOD_Evening
     else TOD_Night.
 
+  (** Dawn phenomenon: ISF reduced to 80% (conservative).
+      This matches correction_twentieths_full. Clinical range is 70-80%.
+      80% chosen to reduce hypoglycemia risk in safety-critical context. *)
   Definition isf_adjustment_percent (tod : TimeOfDay) : nat :=
     match tod with
-    | TOD_Dawn => 70
+    | TOD_Dawn => 80
     | TOD_Morning => 90
     | TOD_Afternoon => 100
     | TOD_Evening => 95
@@ -572,8 +588,8 @@ End ISFVariability.
 
 Export ISFVariability.
 
-(** Witness: 5 AM is dawn, ISF reduced to 70%. Base ISF 50 -> 35. *)
-Lemma witness_dawn_isf : adjusted_isf_by_hour 50 5 = 35.
+(** Witness: 5 AM is dawn, ISF reduced to 80%. Base ISF 50 -> 40. *)
+Lemma witness_dawn_isf : adjusted_isf_by_hour 50 5 = 40.
 Proof. reflexivity. Qed.
 
 (** Witness: 2 PM is afternoon, ISF unchanged. Base ISF 50 -> 50. *)
@@ -584,13 +600,13 @@ Proof. reflexivity. Qed.
 Lemma witness_night_isf : adjusted_isf_by_hour 50 23 = 55.
 Proof. reflexivity. Qed.
 
-(** Counterexample: dawn (6 AM) requires 43% more insulin than night (2 AM).
-    Dawn ISF = 35, Night ISF = 55. Correction for 50 mg/dL delta:
-    Dawn: 50/35 = 1.4U. Night: 50/55 = 0.9U. *)
+(** Counterexample: dawn (6 AM) requires 38% more insulin than night (2 AM).
+    Dawn ISF = 40, Night ISF = 55. Correction for 50 mg/dL delta:
+    Dawn: 50/40 = 1.25U. Night: 50/55 = 0.9U. *)
 Lemma counterex_dawn_vs_night :
   let dawn_isf := adjusted_isf_by_hour 50 6 in
   let night_isf := adjusted_isf_by_hour 50 2 in
-  dawn_isf = 35 /\ night_isf = 55.
+  dawn_isf = 40 /\ night_isf = 55.
 Proof. split; reflexivity. Qed.
 
 (** Property: adjusted ISF is always positive when base ISF >= 2.
@@ -1887,6 +1903,89 @@ Lemma witness_tenths_roundtrip_lossy :
   mg_dL_to_mmol_tenths (mmol_tenths_to_mg_dL 100) = 99.
 Proof. reflexivity. Qed.
 
+(** Round-trip bound: mg -> mmol -> mg never exceeds original. *)
+Lemma mg_mmol_mg_upper_bound : forall mg,
+  mmol_tenths_to_mg_dL (mg_dL_to_mmol_tenths mg) <= mg.
+Proof.
+  intro mg.
+  unfold mmol_tenths_to_mg_dL, mg_dL_to_mmol_tenths, FACTOR.
+  pose proof (Nat.div_mod (mg * 1000) 1802 ltac:(lia)) as Hdiv.
+  pose proof (Nat.mod_upper_bound (mg * 1000) 1802 ltac:(lia)) as Hmod.
+  pose proof (Nat.mul_div_le (mg * 1000) 1802 ltac:(lia)) as Hmul.
+  assert ((mg * 1000 / 1802) * 1802 <= mg * 1000) by lia.
+  apply Nat.div_le_upper_bound. lia. lia.
+Qed.
+
+(** Round-trip bound: mg -> mmol -> mg loses at most 2 mg/dL.
+    Error comes from two integer divisions: 1802/1000 ≈ 1.802 rounds. *)
+Lemma mg_mmol_mg_error_bound : forall mg,
+  mg <= mmol_tenths_to_mg_dL (mg_dL_to_mmol_tenths mg) + 2.
+Proof.
+  intro mg.
+  unfold mmol_tenths_to_mg_dL, mg_dL_to_mmol_tenths, FACTOR.
+  pose proof (Nat.div_mod (mg * 1000) 1802 ltac:(lia)) as Hdiv1.
+  pose proof (Nat.mod_upper_bound (mg * 1000) 1802 ltac:(lia)) as Hmod1.
+  set (q := mg * 1000 / 1802).
+  pose proof (Nat.div_mod (q * 1802) 1000 ltac:(lia)) as Hdiv2.
+  pose proof (Nat.mod_upper_bound (q * 1802) 1000 ltac:(lia)) as Hmod2.
+  assert (q * 1802 >= mg * 1000 - 1801) by lia.
+  assert ((q * 1802) / 1000 >= (mg * 1000 - 1801) / 1000).
+  { apply Nat.div_le_mono. lia. lia. }
+  assert ((mg * 1000 - 1801) / 1000 >= mg - 2).
+  { destruct (mg * 1000 <=? 1801) eqn:E.
+    - apply Nat.leb_le in E. assert (mg <= 1) by lia.
+      destruct mg; simpl; lia.
+    - apply Nat.leb_nle in E.
+      apply Nat.div_le_lower_bound. lia. lia. }
+  lia.
+Qed.
+
+(** Round-trip bound: mmol -> mg -> mmol never exceeds original. *)
+Lemma mmol_mg_mmol_upper_bound : forall mmol,
+  mg_dL_to_mmol_tenths (mmol_tenths_to_mg_dL mmol) <= mmol.
+Proof.
+  intro mmol.
+  unfold mmol_tenths_to_mg_dL, mg_dL_to_mmol_tenths, FACTOR.
+  pose proof (Nat.mul_div_le (mmol * 1802) 1000 ltac:(lia)) as Hmul.
+  assert ((mmol * 1802 / 1000) * 1000 <= mmol * 1802) by lia.
+  apply Nat.div_le_upper_bound. lia. nia.
+Qed.
+
+(** Round-trip bound: mmol -> mg -> mmol loses at most 1 tenth.
+    Error is smaller because 1000/1802 < 1. *)
+Lemma mmol_mg_mmol_error_bound : forall mmol,
+  mmol <= mg_dL_to_mmol_tenths (mmol_tenths_to_mg_dL mmol) + 1.
+Proof.
+  intro mmol.
+  unfold mmol_tenths_to_mg_dL, mg_dL_to_mmol_tenths, FACTOR.
+  pose proof (Nat.div_mod (mmol * 1802) 1000 ltac:(lia)) as Hdiv1.
+  pose proof (Nat.mod_upper_bound (mmol * 1802) 1000 ltac:(lia)) as Hmod1.
+  set (r := mmol * 1802 / 1000).
+  pose proof (Nat.div_mod (r * 1000) 1802 ltac:(lia)) as Hdiv2.
+  pose proof (Nat.mod_upper_bound (r * 1000) 1802 ltac:(lia)) as Hmod2.
+  assert (r * 1000 >= mmol * 1802 - 999) by lia.
+  assert ((r * 1000) / 1802 >= (mmol * 1802 - 999) / 1802).
+  { apply Nat.div_le_mono. lia. lia. }
+  assert ((mmol * 1802 - 999) / 1802 >= mmol - 1).
+  { destruct (mmol * 1802 <=? 999) eqn:E.
+    - apply Nat.leb_le in E. assert (mmol = 0) by lia. subst. simpl. lia.
+    - apply Nat.leb_nle in E.
+      apply Nat.div_le_lower_bound. lia. nia. }
+  lia.
+Qed.
+
+(** Combined: absolute error for clinical BG range (40-400 mg/dL). *)
+Lemma clinical_roundtrip_error : forall mg,
+  40 <= mg <= 400 ->
+  mg - 2 <= mmol_tenths_to_mg_dL (mg_dL_to_mmol_tenths mg) /\
+  mmol_tenths_to_mg_dL (mg_dL_to_mmol_tenths mg) <= mg.
+Proof.
+  intros mg Hrange.
+  split.
+  - pose proof (mg_mmol_mg_error_bound mg). lia.
+  - apply mg_mmol_mg_upper_bound.
+Qed.
+
 (** ========================================================================= *)
 (** PART XIV: FIXED-POINT INSULIN ARITHMETIC                                  *)
 (** Insulin pumps deliver in 0.05U increments. We represent doses as          *)
@@ -2957,11 +3056,23 @@ Module ValidatedPrecision.
   Definition cap_twentieths (t : Insulin_twentieth) : Insulin_twentieth :=
     if t <=? PREC_BOLUS_MAX_TWENTIETHS then t else PREC_BOLUS_MAX_TWENTIETHS.
 
+  Definition IOB_HIGH_THRESHOLD_TWENTIETHS : nat := 200.
+  Definition MAX_HISTORY_LEN : nat := 100.
+  Definition MAX_DOSE_TWENTIETHS : nat := 500.
+
+  Definition history_extraction_safe (events : list BolusEvent) : bool :=
+    (length events <=? MAX_HISTORY_LEN) &&
+    forallb (fun e => be_dose_twentieths e <=? MAX_DOSE_TWENTIETHS) events.
+
+  Definition iob_dangerously_high (iob : Insulin_twentieth) : bool :=
+    IOB_HIGH_THRESHOLD_TWENTIETHS <=? iob.
+
   Definition prec_input_valid (input : PrecisionInput) : bool :=
     bg_in_meter_range (pi_current_bg input) &&
     carbs_reasonable (pi_carbs_g input) &&
     time_reasonable (pi_now input) &&
-    history_valid (pi_now input) (pi_bolus_history input).
+    history_valid (pi_now input) (pi_bolus_history input) &&
+    history_extraction_safe (pi_bolus_history input).
 
   Inductive PrecisionResult : Type :=
     | PrecOK : Insulin_twentieth -> bool -> PrecisionResult
@@ -2976,11 +3087,7 @@ Module ValidatedPrecision.
   Definition prec_error_fault : nat := 7.
   Definition prec_error_tdd_exceeded : nat := 8.
   Definition prec_error_iob_high : nat := 9.
-
-  Definition IOB_HIGH_THRESHOLD_TWENTIETHS : nat := 200.
-
-  Definition iob_dangerously_high (iob : Insulin_twentieth) : bool :=
-    IOB_HIGH_THRESHOLD_TWENTIETHS <=? iob.
+  Definition prec_error_extraction_unsafe : nat := 10.
 
   Definition validated_precision_bolus (input : PrecisionInput) (params : PrecisionParams) : PrecisionResult :=
     if negb (prec_params_valid params) then PrecError prec_error_invalid_params
@@ -2990,6 +3097,8 @@ Module ValidatedPrecision.
       then PrecError prec_error_invalid_time
     else if negb (history_valid (pi_now input) (pi_bolus_history input))
       then PrecError prec_error_invalid_history
+    else if negb (history_extraction_safe (pi_bolus_history input))
+      then PrecError prec_error_extraction_unsafe
     else if bolus_too_soon (pi_now input) (pi_bolus_history input)
       then PrecError prec_error_stacking
     else if fault_blocks_bolus (pi_fault input)
@@ -3040,8 +3149,7 @@ Export ValidatedPrecision.
 Lemma witness_validated_prec_ok :
   exists t c, validated_precision_bolus witness_prec_input witness_prec_params = PrecOK t c.
 Proof.
-  unfold validated_precision_bolus, witness_prec_input, witness_prec_params.
-  simpl. eexists. eexists. reflexivity.
+  exists 140, false. reflexivity.
 Qed.
 
 (** Witness: cap at 500 twentieths (25U). *)
@@ -3074,19 +3182,19 @@ Proof. simpl. eexists. eexists. reflexivity. Qed.
 
 (** Counterexample: TDD exceeded rejected.
     mkBolusEvent takes (dose, time). 70kg patient: limit = 70 * 20 = 1400 twentieths.
-    now=2000, window=[560,2000]. Bolus: dose=1500 at t=1000 is in window.
-    TDD = 1500 >= 1400 limit, so blocked. *)
+    now=2000, window=[560,2000]. Three boluses of 500 each in window.
+    TDD = 1500 >= 1400 limit, so blocked. All doses <= 500 (extraction safe). *)
 Definition prec_input_tdd_exceeded : PrecisionInput :=
-  mkPrecisionInput 60 150 2000 [mkBolusEvent 1500 1000] Activity_Normal false Fault_None (Some 70).
+  mkPrecisionInput 60 150 2000 [mkBolusEvent 500 1800; mkBolusEvent 500 1500; mkBolusEvent 500 1000] Activity_Normal false Fault_None (Some 70).
 
 Lemma counterex_prec_tdd_exceeded :
   validated_precision_bolus prec_input_tdd_exceeded witness_prec_params = PrecError prec_error_tdd_exceeded.
 Proof. reflexivity. Qed.
 
 (** Witness: same scenario with lighter history passes TDD check.
-    Bolus: dose=1000 at t=1000, TDD=1000 < 1400. *)
+    Two boluses of 500 each. TDD=1000 < 1400. *)
 Definition prec_input_tdd_ok : PrecisionInput :=
-  mkPrecisionInput 60 150 2000 [mkBolusEvent 1000 1000] Activity_Normal false Fault_None (Some 70).
+  mkPrecisionInput 60 150 2000 [mkBolusEvent 500 1500; mkBolusEvent 500 1000] Activity_Normal false Fault_None (Some 70).
 
 Lemma witness_tdd_ok :
   exists t c, validated_precision_bolus prec_input_tdd_ok witness_prec_params = PrecOK t c.
@@ -3185,6 +3293,7 @@ Proof.
   destruct (negb (bg_in_meter_range (pi_current_bg input) && carbs_reasonable (pi_carbs_g input))); [discriminate|].
   destruct (negb (time_reasonable (pi_now input))); [discriminate|].
   destruct (negb (history_valid (pi_now input) (pi_bolus_history input))); [discriminate|].
+  destruct (negb (history_extraction_safe (pi_bolus_history input))); [discriminate|].
   destruct (bolus_too_soon (pi_now input) (pi_bolus_history input)); [discriminate|].
   destruct (fault_blocks_bolus (pi_fault input)); [discriminate|].
   destruct (is_hypo (pi_current_bg input)); [discriminate|].
@@ -3210,6 +3319,7 @@ Proof.
   destruct (negb (bg_in_meter_range (pi_current_bg input) && carbs_reasonable (pi_carbs_g input))); [discriminate|].
   destruct (negb (time_reasonable (pi_now input))); [discriminate|].
   destruct (negb (history_valid (pi_now input) (pi_bolus_history input))); [discriminate|].
+  destruct (negb (history_extraction_safe (pi_bolus_history input))); [discriminate|].
   destruct (bolus_too_soon (pi_now input) (pi_bolus_history input)); [discriminate|].
   destruct (fault_blocks_bolus (pi_fault input)); [discriminate|].
   destruct (is_hypo (pi_current_bg input)) eqn:E; [discriminate|].
@@ -3246,9 +3356,6 @@ Module MmolInput.
     mpi_fault : FaultStatus;
     mpi_weight_kg : option nat
   }.
-
-  Definition mmol_tenths_to_mg_dL (mmol_tenths : nat) : BG_mg_dL :=
-    (mmol_tenths * 1802) / 1000.
 
   Definition convert_mmol_input (input : MmolPrecisionInput) : PrecisionInput :=
     mkPrecisionInput
@@ -3405,8 +3512,9 @@ Proof.
     destruct (negb (bg_in_meter_range (pi_current_bg input) && carbs_reasonable (pi_carbs_g input))) eqn:E1; [discriminate|].
     destruct (negb (time_reasonable (pi_now input))) eqn:E3; [discriminate|].
     destruct (negb (history_valid (pi_now input) (pi_bolus_history input))) eqn:E2; [discriminate|].
-    apply negb_false_iff in E1. apply negb_false_iff in E2. apply negb_false_iff in E3.
-    rewrite E1, E2, E3. reflexivity.
+    destruct (negb (history_extraction_safe (pi_bolus_history input))) eqn:E4; [discriminate|].
+    apply negb_false_iff in E1. apply negb_false_iff in E2. apply negb_false_iff in E3. apply negb_false_iff in E4.
+    rewrite E1, E2, E3, E4. reflexivity.
   }
   split. { apply rounding_le_original. }
   pose proof (validated_prec_bounded input params t c H) as Hbound.
@@ -3613,21 +3721,7 @@ Qed.
 
 Module DeliveryFault.
 
-  Inductive FaultStatus : Type :=
-    | Fault_None : FaultStatus
-    | Fault_Occlusion : FaultStatus
-    | Fault_LowReservoir : nat -> FaultStatus
-    | Fault_BatteryLow : FaultStatus
-    | Fault_Unknown : FaultStatus.
-
-  Definition fault_blocks_bolus (f : FaultStatus) : bool :=
-    match f with
-    | Fault_None => false
-    | Fault_Occlusion => true
-    | Fault_LowReservoir remaining => remaining <? 10
-    | Fault_BatteryLow => false
-    | Fault_Unknown => true
-    end.
+  (** FaultStatus and fault_blocks_bolus defined globally in PART XV-B. *)
 
   Definition fault_requires_warning (f : FaultStatus) : bool :=
     match f with
@@ -4212,13 +4306,7 @@ Definition fully_adjusted_isf_tenths (minutes : Minutes) (bg : BG_mg_dL) (base_i
 
 Module ActivityModifiers.
 
-  Inductive ActivityState : Type :=
-    | Activity_Normal : ActivityState
-    | Activity_LightExercise : ActivityState
-    | Activity_ModerateExercise : ActivityState
-    | Activity_IntenseExercise : ActivityState
-    | Activity_Illness : ActivityState
-    | Activity_Stress : ActivityState.
+  (** ActivityState defined globally after BilinearIOB export. *)
 
   Definition icr_modifier (state : ActivityState) : nat :=
     match state with
@@ -4321,6 +4409,64 @@ Module ExtractionBounds.
 End ExtractionBounds.
 
 Export ExtractionBounds.
+
+(** Equivalence between history_extraction_safe and extraction_safe_history.
+    Both check the same properties but are defined in different modules. *)
+Lemma forallb_all_doses_bounded : forall events,
+  forallb (fun e => be_dose_twentieths e <=? MAX_DOSE_TWENTIETHS) events = true ->
+  all_doses_bounded events = true.
+Proof.
+  induction events as [|e rest IH]; intro H.
+  - reflexivity.
+  - simpl in *. apply andb_true_iff in H. destruct H as [He Hrest].
+    apply andb_true_iff. split.
+    + unfold dose_bounded. unfold MAX_DOSE_TWENTIETHS, PREC_BOLUS_MAX_TWENTIETHS in *. exact He.
+    + apply IH. exact Hrest.
+Qed.
+
+Lemma all_doses_bounded_forallb : forall events,
+  all_doses_bounded events = true ->
+  forallb (fun e => be_dose_twentieths e <=? MAX_DOSE_TWENTIETHS) events = true.
+Proof.
+  induction events as [|e rest IH]; intro H.
+  - reflexivity.
+  - simpl in *. apply andb_true_iff in H. destruct H as [He Hrest].
+    apply andb_true_iff. split.
+    + unfold dose_bounded in He. unfold MAX_DOSE_TWENTIETHS, PREC_BOLUS_MAX_TWENTIETHS. exact He.
+    + apply IH. exact Hrest.
+Qed.
+
+Lemma history_extraction_safe_equiv : forall events,
+  history_extraction_safe events = extraction_safe_history events.
+Proof.
+  intro events.
+  unfold history_extraction_safe, extraction_safe_history, history_length_bounded.
+  unfold MAX_HISTORY_LEN, MAX_HISTORY_LENGTH.
+  destruct (length events <=? 100) eqn:Elen; [|reflexivity].
+  simpl.
+  destruct (forallb (fun e => be_dose_twentieths e <=? MAX_DOSE_TWENTIETHS) events) eqn:Eforall.
+  - apply forallb_all_doses_bounded in Eforall. rewrite Eforall. reflexivity.
+  - destruct (all_doses_bounded events) eqn:Eall.
+    + apply all_doses_bounded_forallb in Eall. rewrite Eall in Eforall. discriminate.
+    + reflexivity.
+Qed.
+
+(** Validated bolus implies extraction_safe_history for the history. *)
+Lemma validated_prec_extraction_safe : forall input params t c,
+  validated_precision_bolus input params = PrecOK t c ->
+  extraction_safe_history (pi_bolus_history input) = true.
+Proof.
+  intros input params t c H.
+  unfold validated_precision_bolus in H.
+  destruct (negb (prec_params_valid params)); [discriminate|].
+  destruct (negb (bg_in_meter_range (pi_current_bg input) && carbs_reasonable (pi_carbs_g input))); [discriminate|].
+  destruct (negb (time_reasonable (pi_now input))); [discriminate|].
+  destruct (negb (history_valid (pi_now input) (pi_bolus_history input))); [discriminate|].
+  destruct (negb (history_extraction_safe (pi_bolus_history input))) eqn:Esafe; [discriminate|].
+  apply negb_false_iff in Esafe.
+  rewrite history_extraction_safe_equiv in Esafe.
+  exact Esafe.
+Qed.
 
 (** Carb bolus intermediate: carbs * 200. With carbs <= 500, max = 100000. *)
 Lemma carb_bolus_intermediate_bounded : forall carbs icr,
@@ -4471,6 +4617,145 @@ Proof. reflexivity. Qed.
 (** ========================================================================= *)
 (** PART XXVII: EXTRACTION                                                    *)
 (** ========================================================================= *)
+
+(** ========================================================================= *)
+(** PART XXVI: END-TO-END SUSPEND SAFETY THEOREM                             *)
+(** If suspend_check_tenths_with_cob returns Suspend_None, then the          *)
+(** predicted eventual BG is at least BG_LEVEL2_HYPO (54 mg/dL).             *)
+(** ========================================================================= *)
+
+Lemma suspend_none_implies_bg_safe : forall current_bg iob cob isf proposed,
+  isf > 0 ->
+  suspend_check_tenths_with_cob current_bg iob cob isf proposed = Suspend_None ->
+  predicted_eventual_bg_tenths current_bg (iob + proposed) cob isf >= BG_LEVEL2_HYPO.
+Proof.
+  intros current_bg iob cob isf proposed Hisf H.
+  unfold suspend_check_tenths_with_cob in H.
+  destruct (isf =? 0) eqn:Eisf.
+  - apply Nat.eqb_eq in Eisf. lia.
+  - destruct (predicted_eventual_bg_tenths current_bg (iob + proposed) cob isf <? BG_LEVEL2_HYPO) eqn:E1.
+    + discriminate.
+    + destruct (predicted_eventual_bg_tenths current_bg (iob + proposed) cob isf <? SUSPEND_THRESHOLD) eqn:E2.
+      * destruct (_ <=? iob); discriminate.
+      * apply Nat.ltb_nlt in E1. lia.
+Qed.
+
+(** When Suspend_Reduce is returned and COB provides sufficient BG rise,
+    the eventual BG is safe. Constraint: cob * 4 >= 54 (i.e., cob >= 14g). *)
+Lemma suspend_reduce_implies_bg_safe : forall current_bg iob cob isf proposed max_dose,
+  isf > 0 ->
+  cob * BG_RISE_PER_GRAM >= BG_LEVEL2_HYPO ->
+  suspend_check_tenths_with_cob current_bg iob cob isf proposed = Suspend_Reduce max_dose ->
+  predicted_eventual_bg_tenths current_bg (iob + max_dose) cob isf >= BG_LEVEL2_HYPO.
+Proof.
+  intros current_bg iob cob isf proposed max_dose Hisf Hcob H.
+  unfold suspend_check_tenths_with_cob in H.
+  destruct (isf =? 0) eqn:Eisf; [discriminate|].
+  destruct (predicted_eventual_bg_tenths current_bg (iob + proposed) cob isf <? BG_LEVEL2_HYPO) eqn:E1; [discriminate|].
+  destruct (predicted_eventual_bg_tenths current_bg (iob + proposed) cob isf <? SUSPEND_THRESHOLD) eqn:E2.
+  - destruct (_ <=? iob) eqn:E3; [discriminate|].
+    injection H as Hmax.
+    unfold predicted_eventual_bg_tenths, predict_bg_drop_tenths.
+    rewrite Eisf.
+    destruct (current_bg <=? (iob + max_dose) * isf / 200) eqn:Edrop.
+    + unfold BG_LEVEL2_HYPO, BG_RISE_PER_GRAM in *. lia.
+    + apply Nat.leb_nle in Edrop.
+      apply Nat.ltb_nlt in E1.
+      unfold predicted_eventual_bg_tenths, predict_bg_drop_tenths in E1.
+      rewrite Eisf in E1.
+      unfold BG_LEVEL2_HYPO, BG_RISE_PER_GRAM in *. lia.
+  - discriminate.
+Qed.
+
+(** End-to-end safety: delivered dose results in safe BG or zero delivery.
+    Requires COB constraint for Suspend_Reduce case. *)
+Theorem suspend_safety_end_to_end : forall current_bg iob cob isf proposed delivered,
+  isf > 0 ->
+  cob * BG_RISE_PER_GRAM >= BG_LEVEL2_HYPO ->
+  (suspend_check_tenths_with_cob current_bg iob cob isf proposed = Suspend_None /\ delivered = proposed) \/
+  (suspend_check_tenths_with_cob current_bg iob cob isf proposed = Suspend_Withhold /\ delivered = 0) \/
+  (exists max_dose, suspend_check_tenths_with_cob current_bg iob cob isf proposed = Suspend_Reduce max_dose /\
+                    delivered <= max_dose) ->
+  predicted_eventual_bg_tenths current_bg (iob + delivered) cob isf >= BG_LEVEL2_HYPO \/
+  delivered = 0.
+Proof.
+  intros current_bg iob cob isf proposed delivered Hisf Hcob H.
+  destruct H as [[Hnone Hdel] | [[Hwith Hdel] | [max_dose [Hred Hdel]]]].
+  - left. subst delivered.
+    eapply suspend_none_implies_bg_safe. exact Hisf. exact Hnone.
+  - right. exact Hdel.
+  - left.
+    unfold predicted_eventual_bg_tenths, predict_bg_drop_tenths.
+    destruct (isf =? 0) eqn:Eisf; [lia|].
+    destruct (current_bg <=? (iob + delivered) * isf / 200) eqn:Edrop.
+    + unfold BG_LEVEL2_HYPO, BG_RISE_PER_GRAM in *. lia.
+    + apply Nat.leb_nle in Edrop.
+      pose proof (suspend_reduce_implies_bg_safe current_bg iob cob isf proposed max_dose Hisf Hcob Hred) as Hsafe.
+      unfold predicted_eventual_bg_tenths, predict_bg_drop_tenths in Hsafe.
+      rewrite Eisf in Hsafe.
+      destruct (current_bg <=? (iob + max_dose) * isf / 200) eqn:Edrop_max.
+      * apply Nat.leb_le in Edrop_max.
+        unfold BG_LEVEL2_HYPO, BG_RISE_PER_GRAM in *. lia.
+      * apply Nat.leb_nle in Edrop_max.
+        unfold BG_LEVEL2_HYPO, BG_RISE_PER_GRAM in *. lia.
+Qed.
+
+(** Witness: suspend_none case preserves safety. *)
+Lemma witness_suspend_none_safe :
+  let current_bg := 150 in
+  let iob := 20 in
+  let cob := 30 in
+  let isf := 500 in
+  let proposed := 40 in
+  suspend_check_tenths_with_cob current_bg iob cob isf proposed = Suspend_None /\
+  predicted_eventual_bg_tenths current_bg (iob + proposed) cob isf >= BG_LEVEL2_HYPO.
+Proof.
+  split.
+  - reflexivity.
+  - unfold predicted_eventual_bg_tenths, predict_bg_drop_tenths, BG_LEVEL2_HYPO, BG_RISE_PER_GRAM. simpl. lia.
+Qed.
+
+(** Witness: withhold case results in delivered = 0. *)
+Lemma witness_suspend_withhold_zero :
+  let current_bg := 70 in
+  let iob := 40 in
+  let cob := 0 in
+  let isf := 500 in
+  let proposed := 40 in
+  suspend_check_tenths_with_cob current_bg iob cob isf proposed = Suspend_Withhold.
+Proof. reflexivity. Qed.
+
+(** ========================================================================= *)
+(** SAFE API DOCUMENTATION                                                     *)
+(** ========================================================================= *)
+(**
+   PRODUCTION USE: Only use validated_* functions for dose calculations.
+
+   SAFE FUNCTIONS (exported, validated, handles all edge cases):
+   - validated_precision_bolus : PrecisionInput -> PrecisionParams -> PrecisionResult
+   - validated_mmol_bolus : MmolPrecisionInput -> PrecisionParams -> PrecisionResult
+   - final_delivery : RoundingMode -> PrecisionResult -> option Insulin_twentieth
+   - prec_result_twentieths : PrecisionResult -> option Insulin_twentieth
+
+   UNSAFE FUNCTIONS (internal only, DO NOT USE directly):
+   - carb_bolus : division by zero if ICR=0
+   - correction_bolus : division by zero if ISF=0
+   - carb_bolus_twentieths : no range validation
+   - correction_bolus_twentieths : no safety checks
+
+   The validated functions provide:
+   - Division-by-zero protection
+   - Input range validation (BG 20-600, carbs 0-500, etc.)
+   - Hypoglycemia safety checks
+   - Stacking protection (bolus_too_soon)
+   - Suspend-before-low prediction
+   - TDD limits
+   - Pediatric dose caps
+   - IOB high threshold checks
+   - Fault status handling
+
+   Extraction (insulin_extracted.ml) only includes safe functions.
+*)
 
 Require Import Coq.extraction.Extraction.
 Require Import Coq.extraction.ExtrOcamlBasic.
