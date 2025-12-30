@@ -3336,6 +3336,10 @@ Proof.
   - lia.
 Qed.
 
+Lemma PrecOK_inj_fst : forall t1 c1 t2 c2,
+  PrecOK t1 c1 = PrecOK t2 c2 -> t1 = t2.
+Proof. intros t1 c1 t2 c2 H. injection H. auto. Qed.
+
 (** PrecOK output bounded by 500 twentieths. *)
 Theorem validated_prec_bounded : forall input params t c,
   validated_precision_bolus input params = PrecOK t c ->
@@ -3354,11 +3358,11 @@ Proof.
   destruct (iob_dangerously_high _ && _); [discriminate|].
   destruct (_ <=? _) eqn:Etdd; [discriminate|].
   destruct (pi_weight_kg input) eqn:Ew.
-  - injection H as Ht Hc. subst t.
+  - apply PrecOK_inj_fst in H. subst t.
     eapply Nat.le_trans.
     + apply pediatric_cap_le_input.
     + apply cap_twentieths_bounded.
-  - injection H as Ht Hc. subst t.
+  - apply PrecOK_inj_fst in H. subst t.
     apply cap_twentieths_bounded.
 Qed.
 
