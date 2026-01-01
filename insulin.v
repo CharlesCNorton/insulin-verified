@@ -35,7 +35,7 @@
 (** ========================================================================= *)
 
 (** ========================================================================= *)
-(** CLINICAL ASSUMPTIONS & LIMITATIONS                                        *)
+(** REMAINING WORK                                                            *)
 (**                                                                           *)
 (** [TODO 1] PHARMACOKINETICS REFERENCES:                                     *)
 (**   Insulin action curves based on:                                         *)
@@ -62,64 +62,59 @@
 (**   should maintain consistent site rotation patterns. This is a known      *)
 (**   limitation accepted by FDA for bolus calculator software.               *)
 (**                                                                           *)
-(** [TODO 6] STATIC ACTIVITY MODIFIERS:                                       *)
+(** [TODO 5] STATIC ACTIVITY MODIFIERS:                                       *)
 (**   Activity modifiers (exercise, illness) are applied as static            *)
 (**   percentages. In reality, exercise effects decay over 12-24 hours.       *)
 (**   Users should manually adjust activity state as conditions change.       *)
-(**   Future work: implement time-weighted activity decay model.              *)
-(** ========================================================================= *)
-
-(** ========================================================================= *)
-(** REMAINING WORK                                                            *)
 (**                                                                           *)
-(** [TODO 7] COB/IOB CURVE SHAPE PROOFS:                                      *)
+(** [TODO 6] COB/IOB CURVE SHAPE PROOFS:                                      *)
 (**   Prove cob_fraction_remaining is monotonically nonincreasing, reaches 0  *)
 (**   at duration, and stays within [0,100]. Same for IOB fraction models.    *)
 (**                                                                           *)
-(** [TODO 8] Z OVERFLOW BOUNDS:                                               *)
+(** [TODO 7] Z OVERFLOW BOUNDS:                                               *)
 (**   CGM trend arithmetic uses Z (signed integers). Prove explicit overflow  *)
 (**   bounds for all Z operations.                                            *)
 (**                                                                           *)
-(** [TODO 9] END-TO-END SYSTEM THEOREM:                                       *)
+(** [TODO 8] END-TO-END SYSTEM THEOREM:                                       *)
 (**   Single theorem connecting validated_precision_bolus = PrecOK through    *)
 (**   final_delivery and pump constraints to BG safety under dynamic model.   *)
 (**                                                                           *)
-(** [TODO 10] IOB SUBTRACTION DESIGN JUSTIFICATION:                           *)
+(** [TODO 9] IOB SUBTRACTION DESIGN JUSTIFICATION:                            *)
 (**   Document why IOB is subtracted from total (meal+correction) rather than *)
 (**   just correction. Current design is conservative for hypo but may worsen *)
 (**   hyperglycemia. Add explicit design rationale.                           *)
 (**                                                                           *)
-(** [TODO 11] PARAMETERIZE GLOBAL CONSTANTS:                                  *)
+(** [TODO 10] PARAMETERIZE GLOBAL CONSTANTS:                                  *)
 (**   BG_RISE_PER_GRAM := 4, trend rates, CONSERVATIVE_COB_ABSORPTION_PERCENT *)
 (**   should be patient-configurable parameters, not hardcoded constants.     *)
 (**                                                                           *)
-(** [TODO 12] VALIDATED INPUT TYPES:                                          *)
+(** [TODO 11] VALIDATED INPUT TYPES:                                          *)
 (**   Use sig/Sigma dependent types so safe calculators only accept inputs    *)
 (**   with proofs of validity, rather than bool-returning validators.         *)
 (**                                                                           *)
-(** [TODO 13] ACTIVITY MODIFIER DECAY:                                        *)
+(** [TODO 12] ACTIVITY MODIFIER DECAY:                                        *)
 (**   Model exercise effect decay over 12-24 hours rather than static mult.   *)
 (**                                                                           *)
-(** [TODO 14] SENSOR LAG COMPENSATION:                                        *)
+(** [TODO 13] SENSOR LAG COMPENSATION:                                        *)
 (**   CGM readings are ~10-15 min delayed. Model this lag explicitly.         *)
 (**                                                                           *)
-(** [TODO 15] MEAL TIMING MODEL:                                              *)
+(** [TODO 14] MEAL TIMING MODEL:                                              *)
 (**   Support pre-bolus and late-bolus compensation. Current model assumes    *)
 (**   bolus at meal start.                                                    *)
 (**                                                                           *)
-(** [TODO 16] EXTENDED/DUAL-WAVE BOLUS:                                       *)
+(** [TODO 15] EXTENDED/DUAL-WAVE BOLUS:                                       *)
 (**   Add support for split or square-wave dosing for high-fat meals.         *)
 (**                                                                           *)
-(** [TODO 17] PUMP COMMUNICATION MODEL:                                       *)
+(** [TODO 16] PUMP COMMUNICATION MODEL:                                       *)
 (**   Model Bluetooth/RF latency and partial delivery scenarios.              *)
 (**                                                                           *)
-(** [TODO 18] FDA CLAIMS DOCUMENTATION:                                       *)
+(** [TODO 17] FDA CLAIMS DOCUMENTATION:                                       *)
 (**   Comments referencing "FDA acceptance" need traceable external evidence. *)
 (**                                                                           *)
-(** [TODO 19] DEPRECATED LEMMAS:                                              *)
+(** [TODO 18] DEPRECATED LEMMAS:                                              *)
 (**   Migrate Nat.div_le_mono etc. to Div0.* equivalents (Coq 8.17+).         *)
 (**                                                                           *)
-(** [TODO 20] OCAML REFINEMENT PROOFS:                                        *)
+(** [TODO 19] OCAML REFINEMENT PROOFS:                                        *)
 (**   Bridge gap between Coq spec and extracted OCaml with refinement proofs. *)
 (** ========================================================================= *)
 
@@ -151,14 +146,8 @@ End UnitTypes.
 
 Export UnitTypes.
 
-(** Coercions TO nat for using wrappers in arithmetic/comparisons. *)
-Coercion mg_dL_val : Mg_dL >-> nat.
-Coercion mmol_tenths_val : Mmol_tenths >-> nat.
-Coercion grams_val : Grams >-> nat.
-Coercion twentieths_val : Twentieths >-> nat.
-Coercion units_val : Units >-> nat.
-Coercion min_val : Min >-> nat.
-Coercion tenths_val : Tenths >-> nat.
+(** Explicit unwrapping - coercions removed for type safety. *)
+(** Use mg_dL_val, grams_val, etc. explicitly to convert to nat. *)
 
 (** ========================================================================= *)
 (** PART I: FOUNDATIONS & PHARMACOKINETICS                                    *)
@@ -212,12 +201,12 @@ Lemma counterex_dka_is_hyper :
 Proof. unfold BG_DKA_RISK, BG_HYPER. lia. Qed.
 
 (** Clinical classification predicates. *)
-Definition is_level2_hypo (bg : BG_mg_dL) : bool := bg <? BG_LEVEL2_HYPO.
-Definition is_hypo (bg : BG_mg_dL) : bool := bg <? BG_HYPO.
-Definition is_normal (bg : BG_mg_dL) : bool := (BG_NORMAL_LOW <=? bg) && (bg <=? BG_NORMAL_HIGH).
-Definition is_hyper (bg : BG_mg_dL) : bool := BG_HYPER <? bg.
-Definition is_severe_hyper (bg : BG_mg_dL) : bool := BG_SEVERE_HYPER <? bg.
-Definition is_dka_risk (bg : BG_mg_dL) : bool := BG_DKA_RISK <=? bg.
+Definition is_level2_hypo (bg : BG_mg_dL) : bool := mg_dL_val bg <? BG_LEVEL2_HYPO.
+Definition is_hypo (bg : BG_mg_dL) : bool := mg_dL_val bg <? BG_HYPO.
+Definition is_normal (bg : BG_mg_dL) : bool := (BG_NORMAL_LOW <=? mg_dL_val bg) && (mg_dL_val bg <=? BG_NORMAL_HIGH).
+Definition is_hyper (bg : BG_mg_dL) : bool := BG_HYPER <? mg_dL_val bg.
+Definition is_severe_hyper (bg : BG_mg_dL) : bool := BG_SEVERE_HYPER <? mg_dL_val bg.
+Definition is_dka_risk (bg : BG_mg_dL) : bool := BG_DKA_RISK <=? mg_dL_val bg.
 
 (** Witness: BG of 50 is severe hypoglycemia. *)
 Lemma witness_50_level2_hypo : is_level2_hypo (mkBG 50) = true.
@@ -655,7 +644,7 @@ Module InsulinParams.
   Definition params_valid (p : PatientParams) : bool :=
     (ICR_MIN <=? pp_icr p) && (pp_icr p <=? ICR_MAX) &&
     (ISF_MIN <=? pp_isf p) && (pp_isf p <=? ISF_MAX) &&
-    (BG_HYPO <=? pp_target_bg p) && (pp_target_bg p <=? BG_HYPER) &&
+    (BG_HYPO <=? mg_dL_val (pp_target_bg p)) && (mg_dL_val (pp_target_bg p) <=? BG_HYPER) &&
     (1 <=? pp_icr p) && (1 <=? pp_isf p).
 
 End InsulinParams.
@@ -926,11 +915,11 @@ Proof. reflexivity. Qed.
 Module CarbBolus.
 
   Definition carb_bolus (carbs : Carbs_g) (icr : nat) : nat :=
-    carbs / icr.
+    grams_val carbs / icr.
 
   Definition carb_bolus_safe (carbs : Carbs_g) (icr : nat) : option nat :=
     if icr =? 0 then None
-    else Some (carbs / icr).
+    else Some (grams_val carbs / icr).
 
 End CarbBolus.
 
@@ -996,8 +985,8 @@ Qed.
 Module CorrectionBolus.
 
   Definition correction_bolus (current_bg target_bg : BG_mg_dL) (isf : nat) : nat :=
-    if current_bg <=? target_bg then 0
-    else (current_bg - target_bg) / isf.
+    if mg_dL_val current_bg <=? mg_dL_val target_bg then 0
+    else (mg_dL_val current_bg - mg_dL_val target_bg) / isf.
 
   Definition correction_bolus_safe (current_bg target_bg : BG_mg_dL) (isf : nat) : option nat :=
     if isf =? 0 then None
@@ -1034,23 +1023,23 @@ Proof. reflexivity. Qed.
 
 (** Property: correction is 0 when BG <= target. *)
 Lemma correction_zero_when_at_or_below_target : forall (bg target : BG_mg_dL) isf,
-  bg <= target -> correction_bolus bg target isf = 0.
+  mg_dL_val bg <= mg_dL_val target -> correction_bolus bg target isf = 0.
 Proof.
   intros bg target isf Hle.
   unfold correction_bolus.
-  destruct (bg <=? target) eqn:E.
+  destruct (mg_dL_val bg <=? mg_dL_val target) eqn:E.
   - reflexivity.
   - rewrite Nat.leb_gt in E. lia.
 Qed.
 
 (** Property: correction is monotonic in BG. *)
 Lemma correction_monotonic_bg : forall (bg1 bg2 target : BG_mg_dL) isf,
-  isf > 0 -> bg1 <= bg2 ->
+  isf > 0 -> mg_dL_val bg1 <= mg_dL_val bg2 ->
   correction_bolus bg1 target isf <= correction_bolus bg2 target isf.
 Proof.
   intros bg1 bg2 target isf Hisf Hle.
   unfold correction_bolus.
-  destruct (bg1 <=? target) eqn:E1; destruct (bg2 <=? target) eqn:E2.
+  destruct (mg_dL_val bg1 <=? mg_dL_val target) eqn:E1; destruct (mg_dL_val bg2 <=? mg_dL_val target) eqn:E2.
   - lia.
   - apply Nat.le_0_l.
   - apply Nat.leb_nle in E1. apply Nat.leb_le in E2. lia.
@@ -1065,7 +1054,7 @@ Lemma correction_antimonotonic_isf : forall (bg target : BG_mg_dL) isf1 isf2,
 Proof.
   intros bg target isf1 isf2 H1 H2 Hle.
   unfold correction_bolus.
-  destruct (bg <=? target); [lia|].
+  destruct (mg_dL_val bg <=? mg_dL_val target); [lia|].
   apply Nat.div_le_compat_l. split. exact H1. exact Hle.
 Qed.
 
@@ -1218,8 +1207,8 @@ Module ReverseCorrection.
 
   Definition reverse_correction (current_bg target_bg : BG_mg_dL) (isf : nat) : nat :=
     if isf =? 0 then 0
-    else if target_bg <=? current_bg then 0
-    else (target_bg - current_bg) / isf.
+    else if mg_dL_val target_bg <=? mg_dL_val current_bg then 0
+    else (mg_dL_val target_bg - mg_dL_val current_bg) / isf.
 
   Definition apply_reverse_correction (carb_bolus : nat) (current_bg target_bg : BG_mg_dL) (isf : nat) : nat :=
     let reduction := reverse_correction current_bg target_bg isf in
@@ -1233,8 +1222,8 @@ Module ReverseCorrectionPrecision.
 
   Definition reverse_correction_twentieths (current_bg target_bg : BG_mg_dL) (isf_tenths : nat) : nat :=
     if isf_tenths =? 0 then 0
-    else if target_bg <=? current_bg then 0
-    else ((target_bg - current_bg) * 200) / isf_tenths.
+    else if mg_dL_val target_bg <=? mg_dL_val current_bg then 0
+    else ((mg_dL_val target_bg - mg_dL_val current_bg) * 200) / isf_tenths.
 
   Definition apply_reverse_correction_twentieths (carb_bolus_tw : nat) (current_bg target_bg : BG_mg_dL) (isf_tenths : nat) : nat :=
     let reduction := reverse_correction_twentieths current_bg target_bg isf_tenths in
@@ -1311,13 +1300,13 @@ Proof. reflexivity. Qed.
 
 (** Property: reverse correction is bounded by (target - BG) / ISF. *)
 Lemma reverse_correction_bounded : forall (bg target : BG_mg_dL) isf,
-  isf > 0 -> target > bg ->
-  reverse_correction bg target isf <= (target - bg) / isf.
+  isf > 0 -> mg_dL_val target > mg_dL_val bg ->
+  reverse_correction bg target isf <= (mg_dL_val target - mg_dL_val bg) / isf.
 Proof.
   intros bg target isf Hisf Hgt.
   unfold reverse_correction.
   destruct (isf =? 0) eqn:E1; [apply Nat.eqb_eq in E1; lia|].
-  destruct (target <=? bg) eqn:E2.
+  destruct (mg_dL_val target <=? mg_dL_val bg) eqn:E2.
   - apply Nat.leb_le in E2. lia.
   - lia.
 Qed.
@@ -1410,24 +1399,24 @@ Module HypoglycemiaSafety.
 
   Definition predicted_bg_after_correction (current_bg target_bg : BG_mg_dL) (isf : nat) : nat :=
     let corr := correction_bolus current_bg target_bg isf in
-    current_bg - corr * isf.
+    mg_dL_val current_bg - corr * isf.
 
   Definition correction_is_safe (current_bg target_bg : BG_mg_dL) (isf : nat) : Prop :=
-    predicted_bg_after_correction current_bg target_bg isf >= target_bg.
+    predicted_bg_after_correction current_bg target_bg isf >= mg_dL_val target_bg.
 
   Definition predicted_bg_at_time (current_bg target_bg : BG_mg_dL) (isf : nat)
                                    (elapsed_minutes dia_minutes : nat) : nat :=
-    if dia_minutes =? 0 then current_bg
+    if dia_minutes =? 0 then mg_dL_val current_bg
     else
       let corr := correction_bolus current_bg target_bg isf in
       let fraction_acted := if dia_minutes <=? elapsed_minutes then 100
                             else ((elapsed_minutes * 100) / dia_minutes) in
       let bg_drop := (corr * isf * fraction_acted) / 100 in
-      if current_bg <=? bg_drop then 0 else current_bg - bg_drop.
+      if mg_dL_val current_bg <=? bg_drop then 0 else mg_dL_val current_bg - bg_drop.
 
   Definition predicted_bg_bilinear (current_bg target_bg : BG_mg_dL) (isf : nat)
                                     (elapsed_minutes dia_minutes : nat) : nat :=
-    if dia_minutes =? 0 then current_bg
+    if dia_minutes =? 0 then mg_dL_val current_bg
     else if dia_minutes <=? elapsed_minutes then
       predicted_bg_after_correction current_bg target_bg isf
     else
@@ -1439,7 +1428,7 @@ Module HypoglycemiaSafety.
         else
           25 + (((elapsed_minutes - peak) * 75) / (dia_minutes - peak)) in
       let bg_drop := (corr * isf * fraction_acted) / 100 in
-      if current_bg <=? bg_drop then 0 else current_bg - bg_drop.
+      if mg_dL_val current_bg <=? bg_drop then 0 else mg_dL_val current_bg - bg_drop.
 
 End HypoglycemiaSafety.
 
@@ -1468,16 +1457,16 @@ Proof. reflexivity. Qed.
 (** Arithmetic safety: floor division cannot subtract more than (current - target). *)
 Theorem correction_arithmetic_bounded : forall (current_bg target_bg : BG_mg_dL) isf,
   isf > 0 ->
-  target_bg > 0 ->
-  predicted_bg_after_correction current_bg target_bg isf >= target_bg \/
-  current_bg <= target_bg.
+  mg_dL_val target_bg > 0 ->
+  predicted_bg_after_correction current_bg target_bg isf >= mg_dL_val target_bg \/
+  mg_dL_val current_bg <= mg_dL_val target_bg.
 Proof.
   intros current_bg target_bg isf Hisf Htarget.
   unfold predicted_bg_after_correction, correction_bolus.
-  destruct (current_bg <=? target_bg) eqn:E.
+  destruct (mg_dL_val current_bg <=? mg_dL_val target_bg) eqn:E.
   - right. apply Nat.leb_le in E. exact E.
   - left. apply Nat.leb_nle in E.
-    assert (Hdiv : isf * ((current_bg - target_bg) / isf) <= current_bg - target_bg).
+    assert (Hdiv : isf * ((mg_dL_val current_bg - mg_dL_val target_bg) / isf) <= mg_dL_val current_bg - mg_dL_val target_bg).
     { apply Nat.mul_div_le. lia. }
     lia.
 Qed.
@@ -1485,15 +1474,15 @@ Qed.
 (** Corollary: If BG >= target and params valid, predicted BG >= target. *)
 Corollary correction_safe_when_above_target : forall (current_bg target_bg : BG_mg_dL) isf,
   isf > 0 ->
-  current_bg >= target_bg ->
-  predicted_bg_after_correction current_bg target_bg isf >= target_bg.
+  mg_dL_val current_bg >= mg_dL_val target_bg ->
+  predicted_bg_after_correction current_bg target_bg isf >= mg_dL_val target_bg.
 Proof.
   intros current_bg target_bg isf Hisf Habove.
   unfold predicted_bg_after_correction, correction_bolus.
-  destruct (current_bg <=? target_bg) eqn:E.
+  destruct (mg_dL_val current_bg <=? mg_dL_val target_bg) eqn:E.
   - apply Nat.leb_le in E. lia.
   - apply Nat.leb_nle in E.
-    assert (Hdiv : isf * ((current_bg - target_bg) / isf) <= current_bg - target_bg).
+    assert (Hdiv : isf * ((mg_dL_val current_bg - mg_dL_val target_bg) / isf) <= mg_dL_val current_bg - mg_dL_val target_bg).
     { apply Nat.mul_div_le. lia. }
     lia.
 Qed.
@@ -1501,7 +1490,7 @@ Qed.
 (** Corollary: With valid params, target >= BG_HYPO, so predicted >= BG_HYPO. *)
 Corollary correction_never_causes_level2_hypo : forall (current_bg : BG_mg_dL) params,
   params_valid params = true ->
-  current_bg >= pp_target_bg params ->
+  mg_dL_val current_bg >= mg_dL_val (pp_target_bg params) ->
   predicted_bg_after_correction current_bg (pp_target_bg params) (pp_isf params) >= BG_HYPO.
 Proof.
   intros current_bg params Hvalid Habove.
@@ -1511,37 +1500,37 @@ Proof.
   apply Nat.leb_le in H5. apply Nat.leb_le in H8.
   assert (Hisf_pos : pp_isf params > 0) by lia.
   assert (Hpred : predicted_bg_after_correction current_bg (pp_target_bg params) (pp_isf params)
-                  >= pp_target_bg params).
+                  >= mg_dL_val (pp_target_bg params)).
   { apply correction_safe_when_above_target. exact Hisf_pos. exact Habove. }
   lia.
 Qed.
 
 (** STRENGTHENED THEOREM: Predicted BG is bounded below by min(current_bg, target_bg).
-    This is unconditional on ISF and handles all cases. *)
+    This is unconditional within valid parameter domain (isf > 0). *)
 Theorem predicted_bg_lower_bound : forall current_bg target_bg isf,
   isf > 0 ->
-  predicted_bg_after_correction current_bg target_bg isf >= Nat.min current_bg target_bg.
+  predicted_bg_after_correction current_bg target_bg isf >= Nat.min (mg_dL_val current_bg) (mg_dL_val target_bg).
 Proof.
   intros current_bg target_bg isf Hisf.
   unfold predicted_bg_after_correction, correction_bolus.
-  destruct (current_bg <=? target_bg) eqn:E.
+  destruct (mg_dL_val current_bg <=? mg_dL_val target_bg) eqn:E.
   - apply Nat.leb_le in E.
     rewrite Nat.min_l by lia. simpl. lia.
   - apply Nat.leb_nle in E.
     rewrite Nat.min_r by lia.
-    assert (Hdiv : isf * ((current_bg - target_bg) / isf) <= current_bg - target_bg).
+    assert (Hdiv : isf * ((mg_dL_val current_bg - mg_dL_val target_bg) / isf) <= mg_dL_val current_bg - mg_dL_val target_bg).
     { apply Nat.mul_div_le. lia. }
     lia.
 Qed.
 
 (** When BG <= target, no correction is given, so predicted BG = current BG. *)
 Theorem no_correction_when_at_or_below_target : forall (current_bg target_bg : BG_mg_dL) isf,
-  current_bg <= target_bg ->
-  predicted_bg_after_correction current_bg target_bg isf = current_bg.
+  mg_dL_val current_bg <= mg_dL_val target_bg ->
+  predicted_bg_after_correction current_bg target_bg isf = mg_dL_val current_bg.
 Proof.
   intros current_bg target_bg isf Hle.
   unfold predicted_bg_after_correction, correction_bolus.
-  destruct (current_bg <=? target_bg) eqn:E.
+  destruct (mg_dL_val current_bg <=? mg_dL_val target_bg) eqn:E.
   - simpl. lia.
   - apply Nat.leb_nle in E. lia.
 Qed.
@@ -1620,10 +1609,10 @@ Proof. reflexivity. Qed.
 Module InputValidation.
 
   Definition bg_in_meter_range (bg : BG_mg_dL) : bool :=
-    (20 <=? bg) && (bg <=? BG_METER_MAX).
+    (20 <=? mg_dL_val bg) && (mg_dL_val bg <=? BG_METER_MAX).
 
   Definition carbs_reasonable (carbs : Carbs_g) : bool :=
-    carbs <=? CARBS_SANITY_MAX.
+    grams_val carbs <=? CARBS_SANITY_MAX.
 
   Definition iob_reasonable (iob : IOB) : bool :=
     iob <=? BOLUS_SANITY_MAX.
@@ -2869,28 +2858,28 @@ Module NonlinearISF.
   Definition ISF_REDUCTION_SEVERE : nat := 60.
 
   Definition adjusted_isf (bg : BG_mg_dL) (base_isf : nat) : nat :=
-    if bg <? BG_RESISTANCE_MILD then base_isf
-    else if bg <? BG_RESISTANCE_SEVERE then (base_isf * ISF_REDUCTION_MILD) / 100
+    if mg_dL_val bg <? BG_RESISTANCE_MILD then base_isf
+    else if mg_dL_val bg <? BG_RESISTANCE_SEVERE then (base_isf * ISF_REDUCTION_MILD) / 100
     else (base_isf * ISF_REDUCTION_SEVERE) / 100.
 
   Definition adjusted_isf_tenths (bg : BG_mg_dL) (base_isf_tenths : nat) : nat :=
-    if bg <? BG_RESISTANCE_MILD then base_isf_tenths
-    else if bg <? BG_RESISTANCE_SEVERE then (base_isf_tenths * ISF_REDUCTION_MILD) / 100
+    if mg_dL_val bg <? BG_RESISTANCE_MILD then base_isf_tenths
+    else if mg_dL_val bg <? BG_RESISTANCE_SEVERE then (base_isf_tenths * ISF_REDUCTION_MILD) / 100
     else (base_isf_tenths * ISF_REDUCTION_SEVERE) / 100.
 
   Definition correction_with_resistance (current_bg target_bg : BG_mg_dL) (base_isf : nat) : nat :=
-    if current_bg <=? target_bg then 0
+    if mg_dL_val current_bg <=? mg_dL_val target_bg then 0
     else
       let eff_isf := adjusted_isf current_bg base_isf in
       if eff_isf =? 0 then 0
-      else (current_bg - target_bg) / eff_isf.
+      else (mg_dL_val current_bg - mg_dL_val target_bg) / eff_isf.
 
   Definition correction_twentieths_with_resistance (current_bg target_bg : BG_mg_dL) (base_isf_tenths : nat) : nat :=
-    if current_bg <=? target_bg then 0
+    if mg_dL_val current_bg <=? mg_dL_val target_bg then 0
     else
       let eff_isf := adjusted_isf_tenths current_bg base_isf_tenths in
       if eff_isf =? 0 then 0
-      else ((current_bg - target_bg) * 200) / eff_isf.
+      else ((mg_dL_val current_bg - mg_dL_val target_bg) * 200) / eff_isf.
 
 End NonlinearISF.
 
@@ -2898,14 +2887,14 @@ Export NonlinearISF.
 
 (** Correction using full ISF adjustment (dawn + resistance). *)
 Definition correction_twentieths_full (minutes : Minutes) (current_bg target_bg : BG_mg_dL) (base_isf_tenths : nat) : nat :=
-  if current_bg <=? target_bg then 0
+  if mg_dL_val current_bg <=? mg_dL_val target_bg then 0
   else
     let hour := (minutes / 60) mod 24 in
     let is_dawn := (4 <=? hour) && (hour <? 8) in
     let dawn_isf := if is_dawn then (base_isf_tenths * 80) / 100 else base_isf_tenths in
     let eff_isf := adjusted_isf_tenths current_bg dawn_isf in
     if eff_isf =? 0 then 0
-    else ((current_bg - target_bg) * 200) / eff_isf.
+    else ((mg_dL_val current_bg - mg_dL_val target_bg) * 200) / eff_isf.
 
 Definition sum_bolus_history (history : list BolusEvent) : Insulin_twentieth :=
   fold_left (fun acc e => acc + be_dose_twentieths e) history 0.
@@ -2933,7 +2922,7 @@ Definition predicted_bg_drop (correction_twentieths : nat) (isf_tenths : nat) : 
 
 Definition should_suspend (current_bg : BG_mg_dL) (correction_twentieths : nat) (isf_tenths : nat) : bool :=
   let drop := predicted_bg_drop correction_twentieths isf_tenths in
-  (current_bg - drop) <? SUSPEND_BEFORE_LOW_THRESHOLD.
+  (mg_dL_val current_bg - drop) <? SUSPEND_BEFORE_LOW_THRESHOLD.
 
 Definition apply_suspend_threshold (bolus : Insulin_twentieth) (current_bg : BG_mg_dL) (isf_tenths : nat) : Insulin_twentieth :=
   if should_suspend current_bg bolus isf_tenths then 0 else bolus.
@@ -3010,26 +2999,34 @@ Proof. intros. unfold round_down_twentieths. lia. Qed.
 Definition CGM_MARGIN_PERCENT : nat := 15.
 
 Definition apply_sensor_margin (bg : BG_mg_dL) (target : BG_mg_dL) : BG_mg_dL :=
-  if bg <=? target then bg
-  else mkBG ((bg * (100 - CGM_MARGIN_PERCENT)) / 100).
+  if mg_dL_val bg <=? mg_dL_val target then bg
+  else mkBG ((mg_dL_val bg * (100 - CGM_MARGIN_PERCENT)) / 100).
 
-Lemma sensor_margin_le : forall (bg target : BG_mg_dL), apply_sensor_margin bg target <= bg.
+Lemma sensor_margin_le : forall (bg target : BG_mg_dL), mg_dL_val (apply_sensor_margin bg target) <= mg_dL_val bg.
 Proof.
   intros bg target.
   unfold apply_sensor_margin, CGM_MARGIN_PERCENT.
-  destruct (bg <=? target); [lia|].
-  apply Nat.div_le_upper_bound; lia.
+  destruct (mg_dL_val bg <=? mg_dL_val target) eqn:E.
+  - lia.
+  - simpl mg_dL_val.
+    apply (Nat.div_le_upper_bound (mg_dL_val bg * 85) 100 (mg_dL_val bg)).
+    + lia.
+    + lia.
 Qed.
 
 Lemma sensor_margin_conservative : forall (bg target : BG_mg_dL),
-  bg > target -> apply_sensor_margin bg target < bg.
+  mg_dL_val bg > mg_dL_val target -> mg_dL_val (apply_sensor_margin bg target) < mg_dL_val bg.
 Proof.
   intros bg target Hgt.
   unfold apply_sensor_margin, CGM_MARGIN_PERCENT.
-  destruct (bg <=? target) eqn:E.
+  destruct (mg_dL_val bg <=? mg_dL_val target) eqn:E.
   - apply Nat.leb_le in E. lia.
-  - assert (bg * 85 < bg * 100) by lia.
-    apply Nat.div_lt_upper_bound; lia.
+  - simpl mg_dL_val.
+    assert (H1: mg_dL_val bg > 0) by lia.
+    assert (H2: mg_dL_val bg * 85 < mg_dL_val bg * 100) by lia.
+    assert (H3: mg_dL_val bg * 85 / 100 < mg_dL_val bg).
+    { apply Nat.Div0.div_lt_upper_bound. lia. }
+    exact H3.
 Qed.
 
 (** --- Fault Status Type ---                                                 *)
@@ -3067,7 +3064,7 @@ Module PrecisionCalculator.
   Definition prec_params_valid (p : PrecisionParams) : bool :=
     (20 <=? prec_icr_tenths p) && (prec_icr_tenths p <=? 1000) &&
     (100 <=? prec_isf_tenths p) && (prec_isf_tenths p <=? 4000) &&
-    (BG_HYPO <=? prec_target_bg p) && (prec_target_bg p <=? BG_HYPER) &&
+    (BG_HYPO <=? mg_dL_val (prec_target_bg p)) && (mg_dL_val (prec_target_bg p) <=? BG_HYPER) &&
     (120 <=? prec_dia p) && (prec_dia p <=? 360).
 
   Definition carb_bolus_twentieths (carbs_g : nat) (icr_tenths : nat) : Insulin_twentieth :=
@@ -3076,8 +3073,8 @@ Module PrecisionCalculator.
 
   Definition correction_bolus_twentieths (current_bg target_bg : BG_mg_dL) (isf_tenths : nat) : Insulin_twentieth :=
     if isf_tenths =? 0 then 0
-    else if current_bg <=? target_bg then 0
-    else ((current_bg - target_bg) * 200) / isf_tenths.
+    else if mg_dL_val current_bg <=? mg_dL_val target_bg then 0
+    else ((mg_dL_val current_bg - mg_dL_val target_bg) * 200) / isf_tenths.
 
   Record PrecisionInput := mkPrecisionInput {
     pi_carbs_g : Carbs_g;
@@ -3096,7 +3093,7 @@ Module PrecisionCalculator.
     let eff_bg := if pi_use_sensor_margin input
                   then apply_sensor_margin (pi_current_bg input) (prec_target_bg params)
                   else pi_current_bg input in
-    let carb := carb_bolus_twentieths (pi_carbs_g input) activity_icr in
+    let carb := carb_bolus_twentieths (grams_val (pi_carbs_g input)) activity_icr in
     let carb_adj := apply_reverse_correction_twentieths carb eff_bg (prec_target_bg params) activity_isf in
     let corr := correction_twentieths_full (pi_now input) eff_bg (prec_target_bg params) activity_isf in
     let iob := total_bilinear_iob (pi_now input) (pi_bolus_history input) (prec_dia params) (prec_insulin_type params) in
@@ -3200,13 +3197,13 @@ Qed.
 
 (** Correction bolus is monotonic in BG. *)
 Lemma correction_bolus_twentieths_monotonic : forall (bg1 bg2 target : BG_mg_dL) isf,
-  isf > 0 -> bg1 <= bg2 ->
+  isf > 0 -> mg_dL_val bg1 <= mg_dL_val bg2 ->
   correction_bolus_twentieths bg1 target isf <= correction_bolus_twentieths bg2 target isf.
 Proof.
   intros bg1 bg2 target isf Hisf Hle.
   unfold correction_bolus_twentieths.
   destruct (isf =? 0) eqn:E; [apply Nat.eqb_eq in E; lia|].
-  destruct (bg1 <=? target) eqn:E1; destruct (bg2 <=? target) eqn:E2.
+  destruct (mg_dL_val bg1 <=? mg_dL_val target) eqn:E1; destruct (mg_dL_val bg2 <=? mg_dL_val target) eqn:E2.
   - lia.
   - apply Nat.le_0_l.
   - apply Nat.leb_nle in E1. apply Nat.leb_le in E2. lia.
@@ -3216,13 +3213,13 @@ Qed.
 
 (** Correction is zero when BG at or below target. *)
 Lemma correction_zero_at_target : forall (bg target : BG_mg_dL) isf,
-  bg <= target ->
+  mg_dL_val bg <= mg_dL_val target ->
   correction_bolus_twentieths bg target isf = 0.
 Proof.
   intros bg target isf Hle.
   unfold correction_bolus_twentieths.
   destruct (isf =? 0); [reflexivity|].
-  destruct (bg <=? target) eqn:E.
+  destruct (mg_dL_val bg <=? mg_dL_val target) eqn:E.
   - reflexivity.
   - apply Nat.leb_nle in E. lia.
 Qed.
@@ -3230,7 +3227,7 @@ Qed.
 (** Pipeline monotonicity: more carbs yields at least as much carb bolus. *)
 Lemma pipeline_monotonic_carbs : forall c1 c2 icr,
   icr > 0 -> grams_val c1 <= grams_val c2 ->
-  carb_bolus_twentieths c1 icr <= carb_bolus_twentieths c2 icr.
+  carb_bolus_twentieths (grams_val c1) icr <= carb_bolus_twentieths (grams_val c2) icr.
 Proof.
   intros c1 c2 icr Hicr Hle.
   unfold carb_bolus_twentieths.
@@ -3298,13 +3295,13 @@ Module SuspendBeforeLow.
 
   Definition predicted_bg (current_bg : BG_mg_dL) (iob_twentieths : Insulin_twentieth) (isf : nat) : BG_mg_dL :=
     let drop := predict_bg_drop iob_twentieths isf in
-    if current_bg <=? drop then mkBG 0 else mkBG (current_bg - drop).
+    if mg_dL_val current_bg <=? drop then mkBG 0 else mkBG (mg_dL_val current_bg - drop).
 
   Definition predicted_eventual_bg (current_bg : BG_mg_dL) (iob_twentieths : Insulin_twentieth)
                                     (cob_grams : nat) (isf : nat) : BG_mg_dL :=
     let drop := predict_bg_drop iob_twentieths isf in
     let rise := cob_grams * BG_RISE_PER_GRAM in
-    let bg_after_drop := if current_bg <=? drop then 0 else current_bg - drop in
+    let bg_after_drop := if mg_dL_val current_bg <=? drop then 0 else mg_dL_val current_bg - drop in
     mkBG (bg_after_drop + rise).
 
   Inductive SuspendDecision : Type :=
@@ -3316,9 +3313,9 @@ Module SuspendBeforeLow.
                            (isf : nat) (proposed : Insulin_twentieth) : SuspendDecision :=
     let total_insulin := iob_twentieths + proposed in
     let pred := predicted_bg current_bg total_insulin isf in
-    if pred <? BG_LEVEL2_HYPO then Suspend_Withhold
-    else if pred <? SUSPEND_THRESHOLD then
-      let safe_insulin := ((current_bg - SUSPEND_THRESHOLD) * ONE_UNIT) / isf in
+    if mg_dL_val pred <? BG_LEVEL2_HYPO then Suspend_Withhold
+    else if mg_dL_val pred <? mg_dL_val SUSPEND_THRESHOLD then
+      let safe_insulin := ((mg_dL_val current_bg - mg_dL_val SUSPEND_THRESHOLD) * ONE_UNIT) / isf in
       if safe_insulin <=? iob_twentieths then Suspend_Withhold
       else Suspend_Reduce (safe_insulin - iob_twentieths)
     else Suspend_None.
@@ -3327,13 +3324,13 @@ Module SuspendBeforeLow.
                                      (cob_grams : nat) (isf : nat) (proposed : Insulin_twentieth) : SuspendDecision :=
     let total_insulin := iob_twentieths + proposed in
     let pred := predicted_eventual_bg current_bg total_insulin cob_grams isf in
-    if pred <? BG_LEVEL2_HYPO then Suspend_Withhold
-    else if pred <? SUSPEND_THRESHOLD then
+    if mg_dL_val pred <? BG_LEVEL2_HYPO then Suspend_Withhold
+    else if mg_dL_val pred <? mg_dL_val SUSPEND_THRESHOLD then
       let rise_from_cob := cob_grams * BG_RISE_PER_GRAM in
-      let effective_target := if SUSPEND_THRESHOLD <=? rise_from_cob then 0
-                              else SUSPEND_THRESHOLD - rise_from_cob in
-      let safe_drop := if current_bg <=? effective_target then 0
-                       else current_bg - effective_target in
+      let effective_target := if mg_dL_val SUSPEND_THRESHOLD <=? rise_from_cob then 0
+                              else mg_dL_val SUSPEND_THRESHOLD - rise_from_cob in
+      let safe_drop := if mg_dL_val current_bg <=? effective_target then 0
+                       else mg_dL_val current_bg - effective_target in
       let safe_insulin := (safe_drop * ONE_UNIT) / isf in
       if safe_insulin <=? iob_twentieths then Suspend_Withhold
       else Suspend_Reduce (safe_insulin - iob_twentieths)
@@ -3356,15 +3353,15 @@ Definition predict_bg_drop_tenths (iob_twentieths : Insulin_twentieth) (isf_tent
 
 Definition predicted_bg_tenths (current_bg : BG_mg_dL) (iob_twentieths : Insulin_twentieth) (isf_tenths : nat) : BG_mg_dL :=
   let drop := predict_bg_drop_tenths iob_twentieths isf_tenths in
-  if current_bg <=? drop then mkBG 0 else mkBG (current_bg - drop).
+  if mg_dL_val current_bg <=? drop then mkBG 0 else mkBG (mg_dL_val current_bg - drop).
 
 Definition suspend_check_tenths (current_bg : BG_mg_dL) (iob_twentieths : Insulin_twentieth)
                                  (isf_tenths : nat) (proposed : Insulin_twentieth) : SuspendDecision :=
   let total_insulin := iob_twentieths + proposed in
   let pred := predicted_bg_tenths current_bg total_insulin isf_tenths in
-  if pred <? BG_LEVEL2_HYPO then Suspend_Withhold
-  else if pred <? SUSPEND_THRESHOLD then
-    let safe_drop := current_bg - SUSPEND_THRESHOLD in
+  if mg_dL_val pred <? BG_LEVEL2_HYPO then Suspend_Withhold
+  else if mg_dL_val pred <? mg_dL_val SUSPEND_THRESHOLD then
+    let safe_drop := mg_dL_val current_bg - mg_dL_val SUSPEND_THRESHOLD in
     let safe_insulin := (safe_drop * 200) / isf_tenths in
     if safe_insulin <=? iob_twentieths then Suspend_Withhold
     else Suspend_Reduce (safe_insulin - iob_twentieths)
@@ -3377,11 +3374,11 @@ Definition conservative_cob_rise (cob_grams : nat) : nat :=
   (cob_grams * CONSERVATIVE_COB_ABSORPTION_PERCENT * BG_RISE_PER_GRAM) / 100.
 
 Definition predicted_eventual_bg_tenths (current_bg : BG_mg_dL) (iob_twentieths : Insulin_twentieth)
-                                         (cob_grams : nat) (isf_tenths : nat) : BG_mg_dL :=
+                                         (cob_grams : nat) (isf_tenths : nat) : nat :=
   let drop := predict_bg_drop_tenths iob_twentieths isf_tenths in
   let rise := conservative_cob_rise cob_grams in
-  let bg_after_drop := if current_bg <=? drop then 0 else current_bg - drop in
-  mkBG (bg_after_drop + rise).
+  let bg_after_drop := if mg_dL_val current_bg <=? drop then 0 else mg_dL_val current_bg - drop in
+  bg_after_drop + rise.
 
 Definition suspend_check_tenths_with_cob (current_bg : BG_mg_dL) (iob_twentieths : Insulin_twentieth)
                                           (cob_grams : nat) (isf_tenths : nat)
@@ -3391,12 +3388,12 @@ Definition suspend_check_tenths_with_cob (current_bg : BG_mg_dL) (iob_twentieths
     let total_insulin := iob_twentieths + proposed in
     let pred := predicted_eventual_bg_tenths current_bg total_insulin cob_grams isf_tenths in
     if pred <? BG_LEVEL2_HYPO then Suspend_Withhold
-    else if pred <? SUSPEND_THRESHOLD then
+    else if pred <? mg_dL_val SUSPEND_THRESHOLD then
       let rise_from_cob := conservative_cob_rise cob_grams in
-      let effective_target := if SUSPEND_THRESHOLD <=? rise_from_cob then 0
-                              else SUSPEND_THRESHOLD - rise_from_cob in
-      let safe_drop := if current_bg <=? effective_target then 0
-                       else current_bg - effective_target in
+      let effective_target := if mg_dL_val SUSPEND_THRESHOLD <=? rise_from_cob then 0
+                              else mg_dL_val SUSPEND_THRESHOLD - rise_from_cob in
+      let safe_drop := if mg_dL_val current_bg <=? effective_target then 0
+                       else mg_dL_val current_bg - effective_target in
       let safe_insulin := (safe_drop * 200) / isf_tenths in
       if safe_insulin <=? iob_twentieths then Suspend_Withhold
       else Suspend_Reduce (safe_insulin - iob_twentieths)
@@ -3529,7 +3526,7 @@ Module ValidatedPrecision.
     else if is_hypo (pi_current_bg input) then PrecError prec_error_hypo
     else
       let iob := total_bilinear_iob (pi_now input) (pi_bolus_history input) (prec_dia params) (prec_insulin_type params) in
-      if iob_dangerously_high iob && (pi_carbs_g input =? 0)
+      if iob_dangerously_high iob && (grams_val (pi_carbs_g input) =? 0)
         then PrecError prec_error_iob_high
       else
         let tdd_current := fold_left (fun acc e =>
@@ -3548,7 +3545,7 @@ Module ValidatedPrecision.
           let eff_bg := if pi_use_sensor_margin input
                         then apply_sensor_margin (pi_current_bg input) (prec_target_bg params)
                         else pi_current_bg input in
-          let suspend_decision := suspend_check_tenths_with_cob eff_bg iob (pi_carbs_g input) activity_isf tdd_capped in
+          let suspend_decision := suspend_check_tenths_with_cob eff_bg iob (grams_val (pi_carbs_g input)) activity_isf tdd_capped in
           let suspended := apply_suspend tdd_capped suspend_decision in
           let adult_capped := cap_twentieths suspended in
           let capped := match pi_weight_kg input with
@@ -4267,7 +4264,7 @@ Module PediatricParams.
   Definition peds_params_valid (p : PediatricPatientParams) : bool :=
     (PEDS_ICR_MIN <=? ped_icr p) && (ped_icr p <=? PEDS_ICR_MAX) &&
     (PEDS_ISF_MIN <=? ped_isf p) && (ped_isf p <=? PEDS_ISF_MAX) &&
-    (BG_HYPO <=? ped_target_bg p) && (ped_target_bg p <=? BG_HYPER) &&
+    (BG_HYPO <=? mg_dL_val (ped_target_bg p)) && (mg_dL_val (ped_target_bg p) <=? BG_HYPER) &&
     (1 <=? ped_icr p) && (1 <=? ped_isf p) &&
     (1 <=? ped_weight_kg p) && (ped_weight_kg p <=? 150) &&
     (ped_age_years p <=? 21).
@@ -4534,8 +4531,8 @@ Proof.
   intros bg base_isf.
   unfold adjusted_isf, BG_RESISTANCE_MILD, BG_RESISTANCE_SEVERE,
          ISF_REDUCTION_MILD, ISF_REDUCTION_SEVERE.
-  destruct (bg <? 250) eqn:E1; [lia|].
-  destruct (bg <? 350) eqn:E2.
+  destruct (mg_dL_val bg <? 250) eqn:E1; [lia|].
+  destruct (mg_dL_val bg <? 350) eqn:E2.
   - apply Nat.div_le_upper_bound. lia. nia.
   - apply Nat.div_le_upper_bound. lia. nia.
 Qed.
@@ -4586,7 +4583,7 @@ Module SensorUncertainty.
   Definition SENSOR_ERROR_PERCENT : nat := 15.
 
   Definition bg_with_margin (bg : BG_mg_dL) (margin_percent : nat) : BG_mg_dL :=
-    mkBG (bg - (bg * margin_percent) / 100).
+    mkBG (mg_dL_val bg - (mg_dL_val bg * margin_percent) / 100).
 
   Definition conservative_bg (bg : BG_mg_dL) : BG_mg_dL :=
     bg_with_margin bg SENSOR_ERROR_PERCENT.
@@ -4622,7 +4619,7 @@ Proof. reflexivity. Qed.
 
 (** Property: conservative BG is always <= actual BG. *)
 Lemma conservative_bg_le : forall bg,
-  conservative_bg bg <= bg.
+  mg_dL_val (conservative_bg bg) <= mg_dL_val bg.
 Proof.
   intro bg. unfold conservative_bg, bg_with_margin, SENSOR_ERROR_PERCENT.
   simpl.
@@ -4960,7 +4957,7 @@ Proof.
   intros bg target isf Hbg Hisf.
   unfold correction_bolus_twentieths.
   destruct (isf =? 0) eqn:E0; [lia|].
-  destruct (bg <=? target) eqn:E1; [lia|].
+  destruct (mg_dL_val bg <=? mg_dL_val target) eqn:E1; [lia|].
   apply Nat.leb_nle in E1.
   apply Nat.div_le_upper_bound. lia.
   nia.
@@ -5125,7 +5122,7 @@ Proof.
   - apply Nat.eqb_eq in Eisf. lia.
   - destruct (predicted_eventual_bg_tenths current_bg (iob + proposed) cob isf <? BG_LEVEL2_HYPO) eqn:E1.
     + discriminate.
-    + destruct (predicted_eventual_bg_tenths current_bg (iob + proposed) cob isf <? SUSPEND_THRESHOLD) eqn:E2.
+    + destruct (predicted_eventual_bg_tenths current_bg (iob + proposed) cob isf <? mg_dL_val SUSPEND_THRESHOLD) eqn:E2.
       * destruct (_ <=? iob); discriminate.
       * apply Nat.ltb_nlt in E1. lia.
 Qed.
@@ -5142,12 +5139,12 @@ Proof.
   unfold suspend_check_tenths_with_cob in H.
   destruct (isf =? 0) eqn:Eisf; [discriminate|].
   destruct (predicted_eventual_bg_tenths current_bg (iob + proposed) cob isf <? BG_LEVEL2_HYPO) eqn:E1; [discriminate|].
-  destruct (predicted_eventual_bg_tenths current_bg (iob + proposed) cob isf <? SUSPEND_THRESHOLD) eqn:E2.
+  destruct (predicted_eventual_bg_tenths current_bg (iob + proposed) cob isf <? mg_dL_val SUSPEND_THRESHOLD) eqn:E2.
   - destruct (_ <=? iob) eqn:E3; [discriminate|].
     injection H as Hmax.
     unfold predicted_eventual_bg_tenths, predict_bg_drop_tenths.
     rewrite Eisf.
-    destruct (current_bg <=? (iob + max_dose) * isf / 200) eqn:Edrop.
+    destruct (mg_dL_val current_bg <=? (iob + max_dose) * isf / 200) eqn:Edrop.
     + simpl. exact Hcob.
     + apply Nat.leb_nle in Edrop.
       apply Nat.ltb_nlt in E1.
@@ -5178,13 +5175,13 @@ Proof.
   - left.
     unfold predicted_eventual_bg_tenths, predict_bg_drop_tenths.
     destruct (isf =? 0) eqn:Eisf; [apply Nat.eqb_eq in Eisf; lia|].
-    destruct (current_bg <=? (iob + delivered) * isf / 200) eqn:Edrop.
+    destruct (mg_dL_val current_bg <=? (iob + delivered) * isf / 200) eqn:Edrop.
     + unfold BG_LEVEL2_HYPO, BG_RISE_PER_GRAM in *. simpl in *. lia.
     + apply Nat.leb_nle in Edrop.
       pose proof (suspend_reduce_implies_bg_safe current_bg iob cob isf proposed max_dose Hisf Hcob Hred) as Hsafe.
       unfold predicted_eventual_bg_tenths, predict_bg_drop_tenths in Hsafe.
       rewrite Eisf in Hsafe.
-      destruct (current_bg <=? (iob + max_dose) * isf / 200) eqn:Edrop_max.
+      destruct (mg_dL_val current_bg <=? (iob + max_dose) * isf / 200) eqn:Edrop_max.
       * apply Nat.leb_le in Edrop_max.
         unfold BG_LEVEL2_HYPO, BG_RISE_PER_GRAM in *. simpl in *. lia.
       * apply Nat.leb_nle in Edrop_max.
@@ -5227,10 +5224,10 @@ Module InputSanitization.
   Definition BG_METER_MIN : nat := 20.
 
   Definition bg_sanitized (bg : BG_mg_dL) : bool :=
-    (BG_METER_MIN <=? bg) && (bg <=? BG_METER_MAX).
+    (BG_METER_MIN <=? mg_dL_val bg) && (mg_dL_val bg <=? BG_METER_MAX).
 
   Definition carbs_sanitized (carbs : Grams) : bool :=
-    carbs <=? CARBS_SANITY_MAX.
+    grams_val carbs <=? CARBS_SANITY_MAX.
 
   Definition icr_sanitized (icr_tenths : nat) : bool :=
     (20 <=? icr_tenths) && (icr_tenths <=? 1000).
