@@ -3590,7 +3590,10 @@ Export StackingGuard.
 
 Module SuspendBeforeLow.
 
-  Definition SUSPEND_THRESHOLD : BG_mg_dL := mkBG 80.
+  (** Suspend threshold now uses GlobalConfig. *)
+  Definition suspend_threshold (cfg : Config) : BG_mg_dL := mkBG (cfg_suspend_threshold_mg_dl cfg).
+  (** Backward-compatible constant using default_config. *)
+  Definition SUSPEND_THRESHOLD : BG_mg_dL := suspend_threshold default_config.
   Definition PREDICTION_HORIZON : Minutes := 30.
 
   Definition predict_bg_drop (iob_twentieths : Insulin_twentieth) (isf : nat) : nat :=
