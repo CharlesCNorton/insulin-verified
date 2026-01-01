@@ -3555,7 +3555,8 @@ Qed.
 Module StackingGuard.
 
   Definition MINIMUM_BOLUS_INTERVAL : Minutes := 15.
-  Definition STACKING_WARNING_THRESHOLD : Minutes := 60.
+  (** Stacking warning threshold now uses GlobalConfig. *)
+  Definition stacking_warning_threshold (cfg : Config) : Minutes := cfg_stacking_warning_threshold_min cfg.
 
   Definition time_since_last_bolus (now : Minutes) (history : list BolusEvent) : option Minutes :=
     match history with
@@ -3571,10 +3572,10 @@ Module StackingGuard.
     | Some elapsed => elapsed <? MINIMUM_BOLUS_INTERVAL
     end.
 
-  Definition stacking_warning (now : Minutes) (history : list BolusEvent) : bool :=
+  Definition stacking_warning (cfg : Config) (now : Minutes) (history : list BolusEvent) : bool :=
     match time_since_last_bolus now history with
     | None => false
-    | Some elapsed => elapsed <? STACKING_WARNING_THRESHOLD
+    | Some elapsed => elapsed <? stacking_warning_threshold cfg
     end.
 
   Definition recent_insulin_delivered (now : Minutes) (history : list BolusEvent) (dia : DIA_minutes) : Insulin_twentieth :=
@@ -4252,7 +4253,7 @@ Qed.
 
 (** Witness: no history means no stacking concern. *)
 Lemma witness_no_history_no_stacking :
-  bolus_too_soon 100 [] = false /\ stacking_warning 100 [] = false.
+  bolus_too_soon 100 [] = false /\ stacking_warning default_config 100 [] = false.
 Proof. split; reflexivity. Qed.
 
 (** Witness: bolus 5 minutes ago is too soon. *)
@@ -4264,7 +4265,7 @@ Proof. reflexivity. Qed.
 
 (** Witness: bolus 5 minutes ago triggers stacking warning. *)
 Lemma witness_5min_stacking_warning :
-  stacking_warning 100 recent_bolus_5min = true.
+  stacking_warning default_config 100 recent_bolus_5min = true.
 Proof. reflexivity. Qed.
 
 (** Witness: bolus 30 minutes ago is not too soon but triggers warning. *)
@@ -4275,7 +4276,7 @@ Lemma witness_30min_not_too_soon :
 Proof. reflexivity. Qed.
 
 Lemma witness_30min_stacking_warning :
-  stacking_warning 100 recent_bolus_30min = true.
+  stacking_warning default_config 100 recent_bolus_30min = true.
 Proof. reflexivity. Qed.
 
 (** Witness: bolus 90 minutes ago is safe, no warning. *)
@@ -4283,7 +4284,7 @@ Definition old_bolus_90min : list BolusEvent := [mkBolusEvent 40 10].
 
 Lemma witness_90min_safe :
   bolus_too_soon 100 old_bolus_90min = false /\
-  stacking_warning 100 old_bolus_90min = false.
+  stacking_warning default_config 100 old_bolus_90min = false.
 Proof. split; reflexivity. Qed.
 
 (** Counterexample: bolus in future does not trigger warning. *)
@@ -4291,7 +4292,7 @@ Definition future_bolus : list BolusEvent := [mkBolusEvent 40 200].
 
 Lemma counterex_future_bolus_no_warning :
   bolus_too_soon 100 future_bolus = false /\
-  stacking_warning 100 future_bolus = false.
+  stacking_warning default_config 100 future_bolus = false.
 Proof. split; reflexivity. Qed.
 
 (** Property: if bolus_too_soon is false and history non-empty,
