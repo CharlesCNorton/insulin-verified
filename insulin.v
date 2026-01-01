@@ -70,9 +70,13 @@
 (**   Single theorem connecting validated_precision_bolus = PrecOK through    *)
 (**   final_delivery and pump constraints to BG safety under dynamic model.   *)
 (**                                                                           *)
-(** [TODO 2] PARAMETERIZE GLOBAL CONSTANTS:                                   *)
-(**   BG_RISE_PER_GRAM := 4, trend rates, CONSERVATIVE_COB_ABSORPTION_PERCENT *)
-(**   should be patient-configurable parameters, not hardcoded constants.     *)
+(** [TODO 2] PARAMETERIZE GLOBAL CONSTANTS (PARTIALLY DONE):                  *)
+(**   GlobalConfig record added with cfg_bg_rise_per_gram, cfg_prediction_    *)
+(**   horizon_min, etc. Key functions (predicted_bg_rise_from_carbs,          *)
+(**   predicted_bg_from_trend, eventual_bg) now take Config parameter.        *)
+(**   REMAINING: Thread config through ALL functions instead of using         *)
+(**   backward-compatible BG_RISE_PER_GRAM constant. Currently ~10 functions  *)
+(**   still use the constant instead of taking config as parameter.           *)
 (**                                                                           *)
 (** [TODO 3] VALIDATED INPUT TYPES:                                           *)
 (**   Use sig/Sigma dependent types so safe calculators only accept inputs    *)
@@ -128,6 +132,75 @@ Export UnitTypes.
 
 (** Explicit unwrapping - coercions removed for type safety. *)
 (** Use mg_dL_val, grams_val, etc. explicitly to convert to nat. *)
+
+(** ========================================================================= *)
+(** GLOBAL CONFIGURATION                                                       *)
+(** Patient-configurable parameters that were previously hardcoded constants.  *)
+(** ========================================================================= *)
+
+Module GlobalConfig.
+
+  (** Record containing all patient-configurable parameters. *)
+  Record Config := mkConfig {
+    (** BG rise per gram of carbs (mg/dL per gram). Default: 4 *)
+    cfg_bg_rise_per_gram : nat;
+
+    (** Conservative COB absorption percentage for safety calculations. Default: 30 *)
+    cfg_conservative_cob_absorption_percent : nat;
+
+    (** Trend prediction horizon in minutes. Default: 20 *)
+    cfg_prediction_horizon_min : nat;
+
+    (** CGM sensor error margin percentage. Default: 15 *)
+    cfg_sensor_error_percent : nat;
+
+    (** Suspend-before-low threshold in mg/dL. Default: 80 *)
+    cfg_suspend_threshold_mg_dl : nat;
+
+    (** Stacking warning threshold in minutes. Default: 60 *)
+    cfg_stacking_warning_threshold_min : nat;
+
+    (** IOB high threshold in twentieths (0.05U units). Default: 200 (10U) *)
+    cfg_iob_high_threshold_twentieths : nat;
+
+    (** TDD warning percentage. Default: 80 *)
+    cfg_tdd_warning_percent : nat;
+
+    (** TDD block percentage. Default: 100 *)
+    cfg_tdd_block_percent : nat
+  }.
+
+  (** Default configuration with standard clinical values. *)
+  Definition default_config : Config := mkConfig
+    4      (* bg_rise_per_gram *)
+    30     (* conservative_cob_absorption_percent *)
+    20     (* prediction_horizon_min *)
+    15     (* sensor_error_percent *)
+    80     (* suspend_threshold_mg_dl *)
+    60     (* stacking_warning_threshold_min *)
+    200    (* iob_high_threshold_twentieths *)
+    80     (* tdd_warning_percent *)
+    100    (* tdd_block_percent *).
+
+  (** Validation: config parameters are within reasonable bounds. *)
+  Definition config_valid (c : Config) : bool :=
+    (1 <=? cfg_bg_rise_per_gram c) && (cfg_bg_rise_per_gram c <=? 10) &&
+    (10 <=? cfg_conservative_cob_absorption_percent c) && (cfg_conservative_cob_absorption_percent c <=? 100) &&
+    (5 <=? cfg_prediction_horizon_min c) && (cfg_prediction_horizon_min c <=? 60) &&
+    (5 <=? cfg_sensor_error_percent c) && (cfg_sensor_error_percent c <=? 30) &&
+    (54 <=? cfg_suspend_threshold_mg_dl c) && (cfg_suspend_threshold_mg_dl c <=? 100) &&
+    (15 <=? cfg_stacking_warning_threshold_min c) && (cfg_stacking_warning_threshold_min c <=? 120) &&
+    (40 <=? cfg_iob_high_threshold_twentieths c) && (cfg_iob_high_threshold_twentieths c <=? 400) &&
+    (50 <=? cfg_tdd_warning_percent c) && (cfg_tdd_warning_percent c <=? 100) &&
+    (cfg_tdd_warning_percent c <=? cfg_tdd_block_percent c) && (cfg_tdd_block_percent c <=? 150).
+
+End GlobalConfig.
+
+Export GlobalConfig.
+
+(** Witness: default_config is valid. *)
+Lemma default_config_valid : config_valid default_config = true.
+Proof. reflexivity. Qed.
 
 (** ========================================================================= *)
 (** PART I: FOUNDATIONS & PHARMACOKINETICS                                    *)
@@ -405,11 +478,12 @@ Module CarbAbsorption.
   Definition cob_fraction_absorbed (elapsed : nat) (mtype : MealType) : nat :=
     100 - cob_fraction_remaining elapsed mtype.
 
-  Definition bg_rise_per_gram : nat := 4.
+  (** BG rise per gram - now uses GlobalConfig. *)
+  Definition bg_rise_per_gram (cfg : Config) : nat := cfg_bg_rise_per_gram cfg.
 
-  Definition predicted_bg_rise_from_carbs (carbs : nat) (elapsed : nat) (mtype : MealType) : nat :=
+  Definition predicted_bg_rise_from_carbs (cfg : Config) (carbs : nat) (elapsed : nat) (mtype : MealType) : nat :=
     let absorbed_pct := cob_fraction_absorbed elapsed mtype in
-    (carbs * bg_rise_per_gram * absorbed_pct) / 100.
+    (carbs * bg_rise_per_gram cfg * absorbed_pct) / 100.
 
   Record MealEvent := mkMealEvent {
     me_carbs_g : nat;
@@ -430,16 +504,16 @@ Module CarbAbsorption.
     | e :: rest => cob_from_meal now e + total_cob now rest
     end.
 
-  Definition bg_impact_from_meal (now : nat) (event : MealEvent) : nat :=
+  Definition bg_impact_from_meal (cfg : Config) (now : nat) (event : MealEvent) : nat :=
     if now <? me_time_minutes event then 0
     else
       let elapsed := now - me_time_minutes event in
-      predicted_bg_rise_from_carbs (me_carbs_g event) elapsed (me_meal_type event).
+      predicted_bg_rise_from_carbs cfg (me_carbs_g event) elapsed (me_meal_type event).
 
-  Fixpoint total_bg_impact_from_meals (now : nat) (events : list MealEvent) : nat :=
+  Fixpoint total_bg_impact_from_meals (cfg : Config) (now : nat) (events : list MealEvent) : nat :=
     match events with
     | nil => 0
-    | e :: rest => bg_impact_from_meal now e + total_bg_impact_from_meals now rest
+    | e :: rest => bg_impact_from_meal cfg now e + total_bg_impact_from_meals cfg now rest
     end.
 
   Definition fat_protein_units (fat_g protein_g : nat) : nat :=
@@ -515,7 +589,7 @@ Proof. reflexivity. Qed.
 (** Witness: BG rise from 60g carbs at 45 min (medium meal).
     Absorbed = 100 - 39 = 61%. BG rise = 60 * 4 * 61 / 100 = 146 mg/dL. *)
 Lemma witness_bg_rise_60g_at_45 :
-  predicted_bg_rise_from_carbs 60 45 Meal_MediumCarbs = 146.
+  predicted_bg_rise_from_carbs default_config 60 45 Meal_MediumCarbs = 146.
 Proof. reflexivity. Qed.
 
 (** Witness: BG rise from 60g fast carbs at 30 min.
@@ -523,14 +597,14 @@ Proof. reflexivity. Qed.
     remaining = 70 * 15^2 / 30^2 = 70 * 225 / 900 = 17.
     absorbed = 83%. BG rise = 60 * 4 * 83 / 100 = 199 mg/dL. *)
 Lemma witness_bg_rise_fast_carbs_30 :
-  predicted_bg_rise_from_carbs 60 30 Meal_FastCarbs = 199.
+  predicted_bg_rise_from_carbs default_config 60 30 Meal_FastCarbs = 199.
 Proof. reflexivity. Qed.
 
 (** Counterexample: high-fat meal at 45 min has absorbed very little.
     45 < 90 (peak), so: 100 - (45*30/90) = 100 - 15 = 85% remaining.
     Only 15% absorbed. BG rise = 60 * 4 * 15 / 100 = 36 mg/dL. *)
 Lemma counterex_high_fat_slow_absorption :
-  predicted_bg_rise_from_carbs 60 45 Meal_HighFatMeal = 36.
+  predicted_bg_rise_from_carbs default_config 60 45 Meal_HighFatMeal = 36.
 Proof. reflexivity. Qed.
 
 (** Property: COB fraction is at most 100. *)
@@ -843,11 +917,12 @@ Module CGMTrend.
     | Trend_FallingRapidly => (-3)
     end.
 
-  Definition PREDICTION_HORIZON_MIN : nat := 20.
+  (** Prediction horizon - now uses GlobalConfig. *)
+  Definition prediction_horizon_min (cfg : Config) : nat := cfg_prediction_horizon_min cfg.
 
-  Definition predicted_bg_from_trend (current_bg : nat) (trend : TrendArrow) : nat :=
+  Definition predicted_bg_from_trend (cfg : Config) (current_bg : nat) (trend : TrendArrow) : nat :=
     let rate := trend_rate_mg_per_min trend in
-    let delta := (rate * Z.of_nat PREDICTION_HORIZON_MIN)%Z in
+    let delta := (rate * Z.of_nat (prediction_horizon_min cfg))%Z in
     if (delta <? 0)%Z then
       let neg_delta := Z.to_nat (Z.opp delta) in
       if current_bg <=? neg_delta then 0
@@ -855,14 +930,14 @@ Module CGMTrend.
     else
       current_bg + Z.to_nat delta.
 
-  Definition trend_correction_adjustment (trend : TrendArrow) (isf : nat) : Z :=
+  Definition trend_correction_adjustment (cfg : Config) (trend : TrendArrow) (isf : nat) : Z :=
     let rate := trend_rate_mg_per_min trend in
-    let bg_delta := (rate * Z.of_nat PREDICTION_HORIZON_MIN)%Z in
+    let bg_delta := (rate * Z.of_nat (prediction_horizon_min cfg))%Z in
     if isf =? 0 then 0%Z
     else (bg_delta / Z.of_nat isf)%Z.
 
-  Definition apply_trend_to_correction (base_correction : nat) (trend : TrendArrow) (isf : nat) : nat :=
-    let adj := trend_correction_adjustment trend isf in
+  Definition apply_trend_to_correction (cfg : Config) (base_correction : nat) (trend : TrendArrow) (isf : nat) : nat :=
+    let adj := trend_correction_adjustment cfg trend isf in
     if (adj <? 0)%Z then
       let neg := Z.to_nat (Z.opp adj) in
       if base_correction <=? neg then 0
@@ -888,45 +963,45 @@ Export CGMTrend.
 
 (** Witness: rising rapidly at BG 150 predicts 150 + 3*20 = 210 in 20 min. *)
 Lemma witness_rising_rapidly_prediction :
-  predicted_bg_from_trend 150 Trend_RisingRapidly = 210.
+  predicted_bg_from_trend default_config 150 Trend_RisingRapidly = 210.
 Proof. reflexivity. Qed.
 
 (** Witness: falling rapidly at BG 150 predicts 150 - 3*20 = 90 in 20 min. *)
 Lemma witness_falling_rapidly_prediction :
-  predicted_bg_from_trend 150 Trend_FallingRapidly = 90.
+  predicted_bg_from_trend default_config 150 Trend_FallingRapidly = 90.
 Proof. reflexivity. Qed.
 
 (** Witness: stable trend predicts same BG. *)
 Lemma witness_stable_prediction :
-  predicted_bg_from_trend 150 Trend_Stable = 150.
+  predicted_bg_from_trend default_config 150 Trend_Stable = 150.
 Proof. reflexivity. Qed.
 
 (** Witness: rising rapidly adds to correction. Base 2U, ISF 50.
     Adjustment = 60 / 50 = 1U. Total = 3U. *)
 Lemma witness_rising_adds_correction :
-  apply_trend_to_correction 2 Trend_RisingRapidly 50 = 3.
+  apply_trend_to_correction default_config 2 Trend_RisingRapidly 50 = 3.
 Proof. reflexivity. Qed.
 
 (** Witness: falling rapidly subtracts from correction. Base 3U, ISF 50.
     Adjustment = -60 / 50 = -2U (floor division). Total = 3 - 2 = 1U. *)
 Lemma witness_falling_subtracts_correction :
-  apply_trend_to_correction 3 Trend_FallingRapidly 50 = 1.
+  apply_trend_to_correction default_config 3 Trend_FallingRapidly 50 = 1.
 Proof. reflexivity. Qed.
 
 (** Counterexample: falling rapidly with small correction goes to 0, not negative.
     Base 0.5U (in twentieths, but here as 0), adjustment -1. Result = 0. *)
 Lemma counterex_falling_floors_at_zero :
-  apply_trend_to_correction 0 Trend_FallingRapidly 50 = 0.
+  apply_trend_to_correction default_config 0 Trend_FallingRapidly 50 = 0.
 Proof. reflexivity. Qed.
 
 (** Counterexample: falling at low BG predicts 0, not negative.
     BG 40, falling rapidly: 40 - 60 would be negative, so 0. *)
 Lemma counterex_low_bg_floors_at_zero :
-  predicted_bg_from_trend 40 Trend_FallingRapidly = 0.
+  predicted_bg_from_trend default_config 40 Trend_FallingRapidly = 0.
 Proof. reflexivity. Qed.
 
 (** Witness: stable trend at any ISF does not change correction. *)
-Lemma witness_stable_isf50 : apply_trend_to_correction 5 Trend_Stable 50 = 5.
+Lemma witness_stable_isf50 : apply_trend_to_correction default_config 5 Trend_Stable 50 = 5.
 Proof. reflexivity. Qed.
 
 (** Z overflow bounds for CGM trend arithmetic. *)
@@ -937,33 +1012,32 @@ Proof.
   destruct t; simpl; lia.
 Qed.
 
-Lemma trend_delta_bounded : forall t,
-  let delta := (trend_rate_mg_per_min t * Z.of_nat PREDICTION_HORIZON_MIN)%Z in
+Lemma trend_delta_bounded_default : forall t,
+  let delta := (trend_rate_mg_per_min t * Z.of_nat (prediction_horizon_min default_config))%Z in
   (-60 <= delta <= 60)%Z.
 Proof.
   intro t.
-  unfold PREDICTION_HORIZON_MIN.
+  unfold prediction_horizon_min, default_config. simpl.
   pose proof (trend_rate_bounded t) as [Hlo Hhi].
-  simpl.
   lia.
 Qed.
 
-Lemma trend_adj_rising_rapidly : trend_correction_adjustment Trend_RisingRapidly 10 = 6%Z.
+Lemma trend_adj_rising_rapidly : trend_correction_adjustment default_config Trend_RisingRapidly 10 = 6%Z.
 Proof. reflexivity. Qed.
 
-Lemma trend_adj_falling_rapidly : trend_correction_adjustment Trend_FallingRapidly 10 = (-6)%Z.
+Lemma trend_adj_falling_rapidly : trend_correction_adjustment default_config Trend_FallingRapidly 10 = (-6)%Z.
 Proof. reflexivity. Qed.
 
-Lemma trend_adj_stable : trend_correction_adjustment Trend_Stable 50 = 0%Z.
+Lemma trend_adj_stable : trend_correction_adjustment default_config Trend_Stable 50 = 0%Z.
 Proof. reflexivity. Qed.
 
-Lemma witness_stable_isf30 : apply_trend_to_correction 3 Trend_Stable 30 = 3.
+Lemma witness_stable_isf30 : apply_trend_to_correction default_config 3 Trend_Stable 30 = 3.
 Proof. reflexivity. Qed.
 
 (** Witness: rising slowly adds less than rising rapidly. *)
 Lemma witness_rising_slowly_vs_rapidly :
-  apply_trend_to_correction 2 Trend_RisingSlowly 50 = 2 /\
-  apply_trend_to_correction 2 Trend_RisingRapidly 50 = 3.
+  apply_trend_to_correction default_config 2 Trend_RisingSlowly 50 = 2 /\
+  apply_trend_to_correction default_config 2 Trend_RisingRapidly 50 = 3.
 Proof. split; reflexivity. Qed.
 
 (** Sanity: parameter bounds are ordered. *)
@@ -1217,25 +1291,26 @@ Proof. intros. lia. Qed.
 
 Module EventualBG.
 
-  Definition BG_RISE_PER_GRAM : nat := 4.
+  (** BG rise per gram - now uses GlobalConfig. *)
+  Definition bg_rise_per_gram_cfg (cfg : Config) : nat := cfg_bg_rise_per_gram cfg.
   Definition BG_DROP_PER_TWENTIETH : nat := 3.
 
   Definition bg_impact_from_iob (iob_twentieths : nat) (isf : nat) : nat :=
     if isf =? 0 then 0
     else (iob_twentieths * isf) / 20.
 
-  Definition bg_impact_from_cob (cob_grams : nat) : nat :=
-    cob_grams * BG_RISE_PER_GRAM.
+  Definition bg_impact_from_cob (cfg : Config) (cob_grams : nat) : nat :=
+    cob_grams * bg_rise_per_gram_cfg cfg.
 
-  Definition eventual_bg (current_bg : nat) (iob_twentieths : nat) (cob_grams : nat) (isf : nat) : nat :=
+  Definition eventual_bg (cfg : Config) (current_bg : nat) (iob_twentieths : nat) (cob_grams : nat) (isf : nat) : nat :=
     let drop_from_iob := bg_impact_from_iob iob_twentieths isf in
-    let rise_from_cob := bg_impact_from_cob cob_grams in
+    let rise_from_cob := bg_impact_from_cob cfg cob_grams in
     let bg_after_iob := if current_bg <=? drop_from_iob then 0 else current_bg - drop_from_iob in
     bg_after_iob + rise_from_cob.
 
-  Definition eventual_bg_with_trend (current_bg : nat) (iob_twentieths : nat) (cob_grams : nat)
+  Definition eventual_bg_with_trend (cfg : Config) (current_bg : nat) (iob_twentieths : nat) (cob_grams : nat)
                                      (isf : nat) (trend_delta : nat) (trend_rising : bool) : nat :=
-    let base_eventual := eventual_bg current_bg iob_twentieths cob_grams isf in
+    let base_eventual := eventual_bg cfg current_bg iob_twentieths cob_grams isf in
     if trend_rising then
       base_eventual + trend_delta
     else
@@ -1253,18 +1328,23 @@ End EventualBG.
 
 Export EventualBG.
 
+(** Backward-compatible constants using default_config values. *)
+(** These allow existing code to continue working while config system is available. *)
+Definition BG_RISE_PER_GRAM : nat := cfg_bg_rise_per_gram default_config.
+Definition PREDICTION_HORIZON_MIN : nat := cfg_prediction_horizon_min default_config.
+
 (** Witness: BG 150, 2U IOB (40 twentieths), no COB, ISF 50.
     IOB drop = 40 * 50 / 20 = 100 mg/dL.
     Eventual BG = 150 - 100 + 0 = 50 mg/dL. *)
 Lemma witness_eventual_bg_iob_only :
-  eventual_bg 150 40 0 50 = 50.
+  eventual_bg default_config 150 40 0 50 = 50.
 Proof. reflexivity. Qed.
 
 (** Witness: BG 100, no IOB, 30g COB.
     COB rise = 30 * 4 = 120 mg/dL.
     Eventual BG = 100 - 0 + 120 = 220 mg/dL. *)
 Lemma witness_eventual_bg_cob_only :
-  eventual_bg 100 0 30 50 = 220.
+  eventual_bg default_config 100 0 30 50 = 220.
 Proof. reflexivity. Qed.
 
 (** Witness: BG 120, 1U IOB (20 twentieths), 15g COB, ISF 50.
@@ -1272,7 +1352,7 @@ Proof. reflexivity. Qed.
     COB rise = 15 * 4 = 60 mg/dL.
     Eventual BG = 120 - 50 + 60 = 130 mg/dL. *)
 Lemma witness_eventual_bg_mixed :
-  eventual_bg 120 20 15 50 = 130.
+  eventual_bg default_config 120 20 15 50 = 130.
 Proof. reflexivity. Qed.
 
 (** Counterexample: large IOB can push eventual BG to 0 (not negative).
@@ -1280,31 +1360,31 @@ Proof. reflexivity. Qed.
     IOB drop = 60 * 50 / 20 = 150 mg/dL.
     80 <= 150, so floors at 0. *)
 Lemma counterex_eventual_floors_at_zero :
-  eventual_bg 80 60 0 50 = 0.
+  eventual_bg default_config 80 60 0 50 = 0.
 Proof. reflexivity. Qed.
 
 (** Witness: current BG 80 (low), but eventual BG 160 (will rise from COB).
     No reverse correction should apply because eventual > target. *)
 Lemma witness_no_reverse_when_eventual_high :
-  let ebg := eventual_bg 80 0 20 50 in
+  let ebg := eventual_bg default_config 80 0 20 50 in
   ebg = 160 /\ smart_reverse_correction ebg 100 50 = 0.
 Proof. split; reflexivity. Qed.
 
 (** Witness: current BG 150 (high), but eventual BG 50 (will drop from IOB).
     Smart reverse should apply: (100 - 50) / 50 = 1U reduction. *)
 Lemma witness_reverse_when_eventual_low :
-  let ebg := eventual_bg 150 40 0 50 in
+  let ebg := eventual_bg default_config 150 40 0 50 in
   ebg = 50 /\ smart_reverse_correction ebg 100 50 = 1.
 Proof. split; reflexivity. Qed.
 
 (** Witness: with rising trend, eventual BG increases. *)
 Lemma witness_eventual_with_rising_trend :
-  eventual_bg_with_trend 100 0 0 50 60 true = 160.
+  eventual_bg_with_trend default_config 100 0 0 50 60 true = 160.
 Proof. reflexivity. Qed.
 
 (** Witness: with falling trend, eventual BG decreases. *)
 Lemma witness_eventual_with_falling_trend :
-  eventual_bg_with_trend 100 0 0 50 30 false = 70.
+  eventual_bg_with_trend default_config 100 0 0 50 30 false = 70.
 Proof. reflexivity. Qed.
 
 (** --- Reverse Correction ---                                                *)
