@@ -3600,10 +3600,10 @@ Module SuspendBeforeLow.
     let drop := predict_bg_drop iob_twentieths isf in
     if mg_dL_val current_bg <=? drop then mkBG 0 else mkBG (mg_dL_val current_bg - drop).
 
-  Definition predicted_eventual_bg (current_bg : BG_mg_dL) (iob_twentieths : Insulin_twentieth)
+  Definition predicted_eventual_bg (cfg : Config) (current_bg : BG_mg_dL) (iob_twentieths : Insulin_twentieth)
                                     (cob_grams : nat) (isf : nat) : BG_mg_dL :=
     let drop := predict_bg_drop iob_twentieths isf in
-    let rise := cob_grams * BG_RISE_PER_GRAM in
+    let rise := cob_grams * cfg_bg_rise_per_gram cfg in
     let bg_after_drop := if mg_dL_val current_bg <=? drop then 0 else mg_dL_val current_bg - drop in
     mkBG (bg_after_drop + rise).
 
@@ -3623,13 +3623,13 @@ Module SuspendBeforeLow.
       else Suspend_Reduce (safe_insulin - iob_twentieths)
     else Suspend_None.
 
-  Definition suspend_check_with_cob (current_bg : BG_mg_dL) (iob_twentieths : Insulin_twentieth)
+  Definition suspend_check_with_cob (cfg : Config) (current_bg : BG_mg_dL) (iob_twentieths : Insulin_twentieth)
                                      (cob_grams : nat) (isf : nat) (proposed : Insulin_twentieth) : SuspendDecision :=
     let total_insulin := iob_twentieths + proposed in
-    let pred := predicted_eventual_bg current_bg total_insulin cob_grams isf in
+    let pred := predicted_eventual_bg cfg current_bg total_insulin cob_grams isf in
     if mg_dL_val pred <? BG_LEVEL2_HYPO then Suspend_Withhold
     else if mg_dL_val pred <? mg_dL_val SUSPEND_THRESHOLD then
-      let rise_from_cob := cob_grams * BG_RISE_PER_GRAM in
+      let rise_from_cob := cob_grams * cfg_bg_rise_per_gram cfg in
       let effective_target := if mg_dL_val SUSPEND_THRESHOLD <=? rise_from_cob then 0
                               else mg_dL_val SUSPEND_THRESHOLD - rise_from_cob in
       let safe_drop := if mg_dL_val current_bg <=? effective_target then 0
@@ -3671,28 +3671,27 @@ Definition suspend_check_tenths (current_bg : BG_mg_dL) (iob_twentieths : Insuli
   else Suspend_None.
 
 Definition SUSPEND_HORIZON_MINUTES : nat := 30.
-Definition CONSERVATIVE_COB_ABSORPTION_PERCENT : nat := 30.
 
-Definition conservative_cob_rise (cob_grams : nat) : nat :=
-  (cob_grams * CONSERVATIVE_COB_ABSORPTION_PERCENT * BG_RISE_PER_GRAM) / 100.
+Definition conservative_cob_rise (cfg : Config) (cob_grams : nat) : nat :=
+  (cob_grams * cfg_conservative_cob_absorption_percent cfg * cfg_bg_rise_per_gram cfg) / 100.
 
-Definition predicted_eventual_bg_tenths (current_bg : BG_mg_dL) (iob_twentieths : Insulin_twentieth)
+Definition predicted_eventual_bg_tenths (cfg : Config) (current_bg : BG_mg_dL) (iob_twentieths : Insulin_twentieth)
                                          (cob_grams : nat) (isf_tenths : nat) : nat :=
   let drop := predict_bg_drop_tenths iob_twentieths isf_tenths in
-  let rise := conservative_cob_rise cob_grams in
+  let rise := conservative_cob_rise cfg cob_grams in
   let bg_after_drop := if mg_dL_val current_bg <=? drop then 0 else mg_dL_val current_bg - drop in
   bg_after_drop + rise.
 
-Definition suspend_check_tenths_with_cob (current_bg : BG_mg_dL) (iob_twentieths : Insulin_twentieth)
+Definition suspend_check_tenths_with_cob (cfg : Config) (current_bg : BG_mg_dL) (iob_twentieths : Insulin_twentieth)
                                           (cob_grams : nat) (isf_tenths : nat)
                                           (proposed : Insulin_twentieth) : SuspendDecision :=
   if isf_tenths =? 0 then Suspend_Withhold
   else
     let total_insulin := iob_twentieths + proposed in
-    let pred := predicted_eventual_bg_tenths current_bg total_insulin cob_grams isf_tenths in
+    let pred := predicted_eventual_bg_tenths cfg current_bg total_insulin cob_grams isf_tenths in
     if pred <? BG_LEVEL2_HYPO then Suspend_Withhold
     else if pred <? mg_dL_val SUSPEND_THRESHOLD then
-      let rise_from_cob := conservative_cob_rise cob_grams in
+      let rise_from_cob := conservative_cob_rise cfg cob_grams in
       let effective_target := if mg_dL_val SUSPEND_THRESHOLD <=? rise_from_cob then 0
                               else mg_dL_val SUSPEND_THRESHOLD - rise_from_cob in
       let safe_drop := if mg_dL_val current_bg <=? effective_target then 0
@@ -3706,7 +3705,7 @@ Definition suspend_check_tenths_with_cob (current_bg : BG_mg_dL) (iob_twentieths
     Total insulin = 60 twentieths = 3U. Drop = 60*500/200 = 150 mg/dL.
     Predicted BG = 100 - 150 = 0 (clamped). Withhold. *)
 Lemma witness_suspend_no_cob_withholds :
-  suspend_check_tenths_with_cob (mkBG 100) 40 0 500 20 = Suspend_Withhold.
+  suspend_check_tenths_with_cob default_config (mkBG 100) 40 0 500 20 = Suspend_Withhold.
 Proof. reflexivity. Qed.
 
 (** Witness: WITH 30g COB, same scenario but higher BG.
@@ -3715,7 +3714,7 @@ Proof. reflexivity. Qed.
     Total = 40. Drop = 40*500/200 = 100. After drop = 80.
     Rise = 50 * 30 * 4 / 100 = 60. Eventual = 140 >= 80. Allowed. *)
 Lemma witness_suspend_with_cob_allows :
-  suspend_check_tenths_with_cob (mkBG 180) 20 50 500 20 = Suspend_None.
+  suspend_check_tenths_with_cob default_config (mkBG 180) 20 50 500 20 = Suspend_None.
 Proof. reflexivity. Qed.
 
 (** Counterexample: even with COB, severe hypo still withholds.
@@ -3723,7 +3722,7 @@ Proof. reflexivity. Qed.
     Total = 140. Drop = 140*500/200 = 350. After drop = 0.
     Conservative rise = 10 * 30 * 4 / 100 = 12. Eventual = 12 < 54. Withhold. *)
 Lemma counterex_cob_not_enough_still_withholds :
-  suspend_check_tenths_with_cob (mkBG 70) 100 10 500 40 = Suspend_Withhold.
+  suspend_check_tenths_with_cob default_config (mkBG 70) 100 10 500 40 = Suspend_Withhold.
 Proof. reflexivity. Qed.
 
 (** Witness: COB prevents false suspend at high BG.
@@ -3731,7 +3730,7 @@ Proof. reflexivity. Qed.
     Total = 40. Drop = 40*500/200 = 100. After drop = 100.
     Conservative rise = 60 * 30 * 4 / 100 = 72. Eventual = 172 >= 80. Allowed. *)
 Lemma witness_cob_prevents_false_suspend :
-  suspend_check_tenths_with_cob (mkBG 200) 20 60 500 20 = Suspend_None.
+  suspend_check_tenths_with_cob default_config (mkBG 200) 20 60 500 20 = Suspend_None.
 Proof. reflexivity. Qed.
 
 (** Witness: Suspend_Reduce exercised when predicted is between 54-80.
@@ -3740,7 +3739,7 @@ Proof. reflexivity. Qed.
     Conservative rise = 20 * 30 * 4 / 100 = 24. Eventual = 44.
     44 < 54, so Suspend_Withhold. *)
 Lemma witness_suspend_withhold_near_hypo :
-  suspend_check_tenths_with_cob (mkBG 120) 0 20 500 40 = Suspend_Withhold.
+  suspend_check_tenths_with_cob default_config (mkBG 120) 0 20 500 40 = Suspend_Withhold.
 Proof. reflexivity. Qed.
 
 (** Witness: Suspend_Reduce between 54 and 80.
@@ -3748,19 +3747,19 @@ Proof. reflexivity. Qed.
     Total = 40. Drop = 40*500/200 = 100. After drop = 50.
     Conservative rise = 30 * 30 * 4 / 100 = 36. Eventual = 86 >= 80. Allowed. *)
 Lemma witness_suspend_reduce_borderline :
-  suspend_check_tenths_with_cob (mkBG 150) 0 30 500 40 = Suspend_None.
+  suspend_check_tenths_with_cob default_config (mkBG 150) 0 30 500 40 = Suspend_None.
 Proof. reflexivity. Qed.
 
 (** Counterexample: ISF=0 always withholds (division safety). *)
 Lemma counterex_suspend_isf_zero_withholds :
-  suspend_check_tenths_with_cob (mkBG 150) 0 30 0 20 = Suspend_Withhold.
+  suspend_check_tenths_with_cob default_config (mkBG 150) 0 30 0 20 = Suspend_Withhold.
 Proof. reflexivity. Qed.
 
 (** Property: ISF=0 always results in Suspend_Withhold for any inputs. *)
-Lemma isf_zero_implies_suspend_withhold : forall bg iob cob proposed,
-  suspend_check_tenths_with_cob bg iob cob 0 proposed = Suspend_Withhold.
+Lemma isf_zero_implies_suspend_withhold : forall cfg bg iob cob proposed,
+  suspend_check_tenths_with_cob cfg bg iob cob 0 proposed = Suspend_Withhold.
 Proof.
-  intros bg iob cob proposed.
+  intros cfg bg iob cob proposed.
   unfold suspend_check_tenths_with_cob.
   reflexivity.
 Defined.
@@ -3812,6 +3811,8 @@ Module ValidatedPrecision.
   Definition prec_error_iob_high : nat := 9.
   Definition prec_error_extraction_unsafe : nat := 10.
 
+  (** Main validated bolus calculator. Uses default_config internally.
+      For custom config, use validated_precision_bolus_cfg. *)
   Definition validated_precision_bolus (input : PrecisionInput) (params : PrecisionParams) : PrecisionResult :=
     if negb (prec_params_valid params) then PrecError prec_error_invalid_params
     else if negb (bg_in_meter_range (pi_current_bg input) && carbs_reasonable (pi_carbs_g input))
@@ -3848,7 +3849,7 @@ Module ValidatedPrecision.
           let eff_bg := if pi_use_sensor_margin input
                         then apply_sensor_margin (pi_current_bg input) (prec_target_bg params)
                         else pi_current_bg input in
-          let suspend_decision := suspend_check_tenths_with_cob eff_bg iob (grams_val (pi_carbs_g input)) activity_isf tdd_capped in
+          let suspend_decision := suspend_check_tenths_with_cob default_config eff_bg iob (grams_val (pi_carbs_g input)) activity_isf tdd_capped in
           let suspended := apply_suspend tdd_capped suspend_decision in
           let adult_capped := cap_twentieths suspended in
           let capped := match pi_weight_kg input with
@@ -5416,16 +5417,16 @@ Qed.
 
 Lemma suspend_none_implies_bg_safe : forall current_bg iob cob isf proposed,
   isf > 0 ->
-  suspend_check_tenths_with_cob current_bg iob cob isf proposed = Suspend_None ->
-  predicted_eventual_bg_tenths current_bg (iob + proposed) cob isf >= BG_LEVEL2_HYPO.
+  suspend_check_tenths_with_cob default_config current_bg iob cob isf proposed = Suspend_None ->
+  predicted_eventual_bg_tenths default_config current_bg (iob + proposed) cob isf >= BG_LEVEL2_HYPO.
 Proof.
   intros current_bg iob cob isf proposed Hisf H.
   unfold suspend_check_tenths_with_cob in H.
   destruct (isf =? 0) eqn:Eisf.
   - apply Nat.eqb_eq in Eisf. lia.
-  - destruct (predicted_eventual_bg_tenths current_bg (iob + proposed) cob isf <? BG_LEVEL2_HYPO) eqn:E1.
+  - destruct (predicted_eventual_bg_tenths default_config current_bg (iob + proposed) cob isf <? BG_LEVEL2_HYPO) eqn:E1.
     + discriminate.
-    + destruct (predicted_eventual_bg_tenths current_bg (iob + proposed) cob isf <? mg_dL_val SUSPEND_THRESHOLD) eqn:E2.
+    + destruct (predicted_eventual_bg_tenths default_config current_bg (iob + proposed) cob isf <? mg_dL_val SUSPEND_THRESHOLD) eqn:E2.
       * destruct (_ <=? iob); discriminate.
       * apply Nat.ltb_nlt in E1. lia.
 Qed.
@@ -5434,15 +5435,15 @@ Qed.
     the eventual BG is safe. Constraint: conservative_cob_rise cob >= 54 (i.e., cob >= 45g). *)
 Lemma suspend_reduce_implies_bg_safe : forall current_bg iob cob isf proposed max_dose,
   isf > 0 ->
-  conservative_cob_rise cob >= BG_LEVEL2_HYPO ->
-  suspend_check_tenths_with_cob current_bg iob cob isf proposed = Suspend_Reduce max_dose ->
-  predicted_eventual_bg_tenths current_bg (iob + max_dose) cob isf >= BG_LEVEL2_HYPO.
+  conservative_cob_rise default_config cob >= BG_LEVEL2_HYPO ->
+  suspend_check_tenths_with_cob default_config current_bg iob cob isf proposed = Suspend_Reduce max_dose ->
+  predicted_eventual_bg_tenths default_config current_bg (iob + max_dose) cob isf >= BG_LEVEL2_HYPO.
 Proof.
   intros current_bg iob cob isf proposed max_dose Hisf Hcob H.
   unfold suspend_check_tenths_with_cob in H.
   destruct (isf =? 0) eqn:Eisf; [discriminate|].
-  destruct (predicted_eventual_bg_tenths current_bg (iob + proposed) cob isf <? BG_LEVEL2_HYPO) eqn:E1; [discriminate|].
-  destruct (predicted_eventual_bg_tenths current_bg (iob + proposed) cob isf <? mg_dL_val SUSPEND_THRESHOLD) eqn:E2.
+  destruct (predicted_eventual_bg_tenths default_config current_bg (iob + proposed) cob isf <? BG_LEVEL2_HYPO) eqn:E1; [discriminate|].
+  destruct (predicted_eventual_bg_tenths default_config current_bg (iob + proposed) cob isf <? mg_dL_val SUSPEND_THRESHOLD) eqn:E2.
   - destruct (_ <=? iob) eqn:E3; [discriminate|].
     injection H as Hmax.
     unfold predicted_eventual_bg_tenths, predict_bg_drop_tenths.
@@ -5453,7 +5454,7 @@ Proof.
       apply Nat.ltb_nlt in E1.
       unfold predicted_eventual_bg_tenths, predict_bg_drop_tenths in E1.
       rewrite Eisf in E1.
-      unfold conservative_cob_rise, CONSERVATIVE_COB_ABSORPTION_PERCENT, BG_RISE_PER_GRAM in *.
+      unfold conservative_cob_rise, default_config, cfg_conservative_cob_absorption_percent, cfg_bg_rise_per_gram in *.
       simpl in *. lia.
   - discriminate.
 Qed.
@@ -5462,12 +5463,12 @@ Qed.
     Requires conservative COB constraint for Suspend_Reduce case. *)
 Theorem suspend_safety_end_to_end : forall current_bg iob cob isf proposed delivered,
   isf > 0 ->
-  conservative_cob_rise cob >= BG_LEVEL2_HYPO ->
-  (suspend_check_tenths_with_cob current_bg iob cob isf proposed = Suspend_None /\ delivered = proposed) \/
-  (suspend_check_tenths_with_cob current_bg iob cob isf proposed = Suspend_Withhold /\ delivered = 0) \/
-  (exists max_dose, suspend_check_tenths_with_cob current_bg iob cob isf proposed = Suspend_Reduce max_dose /\
+  conservative_cob_rise default_config cob >= BG_LEVEL2_HYPO ->
+  (suspend_check_tenths_with_cob default_config current_bg iob cob isf proposed = Suspend_None /\ delivered = proposed) \/
+  (suspend_check_tenths_with_cob default_config current_bg iob cob isf proposed = Suspend_Withhold /\ delivered = 0) \/
+  (exists max_dose, suspend_check_tenths_with_cob default_config current_bg iob cob isf proposed = Suspend_Reduce max_dose /\
                     delivered <= max_dose) ->
-  predicted_eventual_bg_tenths current_bg (iob + delivered) cob isf >= BG_LEVEL2_HYPO \/
+  predicted_eventual_bg_tenths default_config current_bg (iob + delivered) cob isf >= BG_LEVEL2_HYPO \/
   delivered = 0.
 Proof.
   intros current_bg iob cob isf proposed delivered Hisf Hcob H.
@@ -5479,16 +5480,16 @@ Proof.
     unfold predicted_eventual_bg_tenths, predict_bg_drop_tenths.
     destruct (isf =? 0) eqn:Eisf; [apply Nat.eqb_eq in Eisf; lia|].
     destruct (mg_dL_val current_bg <=? (iob + delivered) * isf / 200) eqn:Edrop.
-    + unfold BG_LEVEL2_HYPO, BG_RISE_PER_GRAM in *. simpl in *. lia.
+    + unfold conservative_cob_rise, default_config, cfg_conservative_cob_absorption_percent, cfg_bg_rise_per_gram, BG_LEVEL2_HYPO in *. simpl in *. lia.
     + apply Nat.leb_nle in Edrop.
       pose proof (suspend_reduce_implies_bg_safe current_bg iob cob isf proposed max_dose Hisf Hcob Hred) as Hsafe.
       unfold predicted_eventual_bg_tenths, predict_bg_drop_tenths in Hsafe.
       rewrite Eisf in Hsafe.
       destruct (mg_dL_val current_bg <=? (iob + max_dose) * isf / 200) eqn:Edrop_max.
       * apply Nat.leb_le in Edrop_max.
-        unfold BG_LEVEL2_HYPO, BG_RISE_PER_GRAM in *. simpl in *. lia.
+        unfold conservative_cob_rise, default_config, cfg_conservative_cob_absorption_percent, cfg_bg_rise_per_gram, BG_LEVEL2_HYPO in *. simpl in *. lia.
       * apply Nat.leb_nle in Edrop_max.
-        unfold BG_LEVEL2_HYPO, BG_RISE_PER_GRAM in *. simpl in *. lia.
+        unfold conservative_cob_rise, default_config, cfg_conservative_cob_absorption_percent, cfg_bg_rise_per_gram, BG_LEVEL2_HYPO in *. simpl in *. lia.
 Qed.
 
 (** Witness: suspend_none case preserves safety.
@@ -5500,13 +5501,13 @@ Lemma witness_suspend_none_safe :
   let cob := 80 in
   let isf := 500 in
   let proposed := 20 in
-  suspend_check_tenths_with_cob current_bg iob cob isf proposed = Suspend_None /\
-  predicted_eventual_bg_tenths current_bg (iob + proposed) cob isf >= BG_LEVEL2_HYPO.
+  suspend_check_tenths_with_cob default_config current_bg iob cob isf proposed = Suspend_None /\
+  predicted_eventual_bg_tenths default_config current_bg (iob + proposed) cob isf >= BG_LEVEL2_HYPO.
 Proof.
   split.
   - reflexivity.
   - unfold predicted_eventual_bg_tenths, predict_bg_drop_tenths, conservative_cob_rise,
-           CONSERVATIVE_COB_ABSORPTION_PERCENT, BG_LEVEL2_HYPO, BG_RISE_PER_GRAM. simpl. lia.
+           default_config, cfg_conservative_cob_absorption_percent, cfg_bg_rise_per_gram, BG_LEVEL2_HYPO. simpl. lia.
 Qed.
 
 (** Witness: withhold case results in delivered = 0. *)
@@ -5516,7 +5517,7 @@ Lemma witness_suspend_withhold_zero :
   let cob := 0 in
   let isf := 500 in
   let proposed := 40 in
-  suspend_check_tenths_with_cob current_bg iob cob isf proposed = Suspend_Withhold.
+  suspend_check_tenths_with_cob default_config current_bg iob cob isf proposed = Suspend_Withhold.
 Proof. reflexivity. Qed.
 
 (** --- Input Sanitization Validation (TODO 10) ---                           *)
