@@ -66,39 +66,35 @@
 (**   percentages. In reality, exercise effects decay over 12-24 hours.       *)
 (**   Users should manually adjust activity state as conditions change.       *)
 (**                                                                           *)
-(** [TODO 1] COB/IOB MONOTONICITY:                                            *)
-(**   Prove cob_fraction_remaining and iob_fraction_remaining are monotonic.  *)
-(**   DONE: Zero at duration, bounded [0,100]. REMAINING: monotonicity.       *)
-(**                                                                           *)
-(** [TODO 2] END-TO-END SYSTEM THEOREM:                                       *)
+(** [TODO 1] END-TO-END SYSTEM THEOREM:                                       *)
 (**   Single theorem connecting validated_precision_bolus = PrecOK through    *)
 (**   final_delivery and pump constraints to BG safety under dynamic model.   *)
 (**                                                                           *)
-(** [TODO 3] PARAMETERIZE GLOBAL CONSTANTS:                                   *)
+(** [TODO 2] PARAMETERIZE GLOBAL CONSTANTS:                                   *)
 (**   BG_RISE_PER_GRAM := 4, trend rates, CONSERVATIVE_COB_ABSORPTION_PERCENT *)
 (**   should be patient-configurable parameters, not hardcoded constants.     *)
 (**                                                                           *)
-(** [TODO 4] VALIDATED INPUT TYPES:                                           *)
+(** [TODO 3] VALIDATED INPUT TYPES:                                           *)
 (**   Use sig/Sigma dependent types so safe calculators only accept inputs    *)
 (**   with proofs of validity, rather than bool-returning validators.         *)
 (**                                                                           *)
-(** [TODO 5] ACTIVITY MODIFIER DECAY:                                         *)
+(** [TODO 4] ACTIVITY MODIFIER DECAY:                                         *)
 (**   Model exercise effect decay over 12-24 hours rather than static mult.   *)
 (**                                                                           *)
-(** [TODO 6] SENSOR LAG COMPENSATION:                                         *)
+(** [TODO 5] SENSOR LAG COMPENSATION:                                         *)
 (**   CGM readings are ~10-15 min delayed. Model this lag explicitly.         *)
 (**                                                                           *)
-(** [TODO 7] MEAL TIMING MODEL:                                               *)
+(** [TODO 6] MEAL TIMING MODEL:                                               *)
 (**   Support pre-bolus and late-bolus compensation. Current model assumes    *)
 (**   bolus at meal start.                                                    *)
 (**                                                                           *)
-(** [TODO 8] EXTENDED/DUAL-WAVE BOLUS:                                        *)
+(** [TODO 7] EXTENDED/DUAL-WAVE BOLUS:                                        *)
 (**   Add support for split or square-wave dosing for high-fat meals.         *)
 (**                                                                           *)
-(** [TODO 9] PUMP COMMUNICATION MODEL:                                        *)
+(** [TODO 8] PUMP COMMUNICATION MODEL:                                        *)
 (**   Model Bluetooth/RF latency and partial delivery scenarios.              *)
 (**                                                                           *)
-(** [TODO 10] OCAML REFINEMENT PROOFS:                                        *)
+(** [TODO 9] OCAML REFINEMENT PROOFS:                                         *)
 (**   Bridge gap between Coq spec and extracted OCaml with refinement proofs. *)
 (** ========================================================================= *)
 
@@ -601,6 +597,80 @@ Proof.
   - destruct (absorption_duration mtype <=? elapsed) eqn:E2.
     + reflexivity.
     + apply Nat.leb_nle in E2. lia.
+Qed.
+
+(** Property: COB fraction is monotonically decreasing in elapsed time.
+    As time passes, less carbs remain unabsorbed. *)
+Lemma cob_fraction_monotonic : forall e1 e2 mtype,
+  e1 <= e2 ->
+  cob_fraction_remaining e2 mtype <= cob_fraction_remaining e1 mtype.
+Proof.
+  intros e1 e2 mtype Hle.
+  unfold cob_fraction_remaining.
+  set (dur := absorption_duration mtype).
+  set (peak := absorption_peak mtype).
+  (* dur > 0 and peak > 0 for all meal types *)
+  assert (Hdur_pos : dur > 0).
+  { unfold dur, absorption_duration. destruct mtype; lia. }
+  assert (Hpeak_pos : peak > 0).
+  { unfold peak, absorption_peak. destruct mtype; lia. }
+  assert (Hpeak_lt_dur : peak < dur).
+  { unfold dur, peak, absorption_duration, absorption_peak. destruct mtype; lia. }
+  (* Case analysis on dur =? 0 *)
+  destruct (dur =? 0) eqn:Edur0.
+  { apply Nat.eqb_eq in Edur0. lia. }
+  (* Case: e2 >= dur *)
+  destruct (dur <=? e2) eqn:Edur_e2.
+  { (* e2 >= dur, so result for e2 is 0 *) lia. }
+  apply Nat.leb_nle in Edur_e2.
+  (* Case: e1 >= dur *)
+  destruct (dur <=? e1) eqn:Edur_e1.
+  { apply Nat.leb_le in Edur_e1. lia. }
+  apply Nat.leb_nle in Edur_e1.
+  (* Both e1 and e2 are < dur *)
+  (* Case: e1 <= peak *)
+  destruct (e1 <=? peak) eqn:Ee1_peak.
+  - apply Nat.leb_le in Ee1_peak.
+    (* Case: e2 <= peak (both in rising phase) *)
+    destruct (e2 <=? peak) eqn:Ee2_peak.
+    + apply Nat.leb_le in Ee2_peak.
+      (* Both in linear region: 100 - (e * 30 / peak) *)
+      (* Larger e means larger subtraction means smaller result *)
+      assert (e1 * 30 / peak <= e2 * 30 / peak).
+      { apply Nat.div_le_mono. lia. nia. }
+      lia.
+    + apply Nat.leb_nle in Ee2_peak.
+      (* e1 in rising phase, e2 in decay phase *)
+      (* At e1: 100 - (e1 * 30 / peak) >= 100 - 30 = 70 (since e1 <= peak) *)
+      (* At e2 (decay): 70 * (tail - post_peak)^2 / tail^2 <= 70 *)
+      assert (He1_val : e1 * 30 / peak <= 30).
+      { apply Nat.div_le_upper_bound. lia. nia. }
+      set (tail := dur - peak).
+      set (post_peak := e2 - peak).
+      assert (Htail_pos : tail > 0) by (unfold tail; lia).
+      assert (Hpost_le_tail : post_peak < tail) by (unfold post_peak, tail; lia).
+      assert (Hdecay_le_70 : 70 * (tail - post_peak) * (tail - post_peak) / (tail * tail) <= 70).
+      { apply Nat.div_le_upper_bound. nia.
+        assert ((tail - post_peak) * (tail - post_peak) <= tail * tail) by nia.
+        nia. }
+      lia.
+  - apply Nat.leb_nle in Ee1_peak.
+    (* e1 > peak, so e2 > peak too (since e2 >= e1) *)
+    destruct (e2 <=? peak) eqn:Ee2_peak.
+    + apply Nat.leb_le in Ee2_peak. lia.
+    + apply Nat.leb_nle in Ee2_peak.
+      (* Both in decay phase *)
+      set (tail := dur - peak).
+      set (post1 := e1 - peak).
+      set (post2 := e2 - peak).
+      assert (Htail_pos : tail > 0) by (unfold tail; lia).
+      assert (Hpost1_lt : post1 < tail) by (unfold post1, tail; lia).
+      assert (Hpost2_lt : post2 < tail) by (unfold post2, tail; lia).
+      assert (Hpost_le : post1 <= post2) by (unfold post1, post2; lia).
+      (* (tail - post2)^2 <= (tail - post1)^2 since post2 >= post1 *)
+      assert (Hrem_le : tail - post2 <= tail - post1) by lia.
+      assert (Hsq_le : (tail - post2) * (tail - post2) <= (tail - post1) * (tail - post1)) by nia.
+      apply Nat.div_le_mono. nia. nia.
 Qed.
 
 (** Witness: pizza (30g fat, 25g protein) has 3 FPU, 90 min delay, 240 min duration. *)
@@ -2474,6 +2544,84 @@ Proof.
   - destruct (dia <=? elapsed) eqn:E2.
     + reflexivity.
     + apply Nat.leb_nle in E2. lia.
+Qed.
+
+(** Property: IOB fraction is monotonically decreasing in elapsed time.
+    As time passes, less insulin remains active. *)
+Lemma iob_fraction_monotonic : forall e1 e2 dia,
+  e1 <= e2 ->
+  dia >= 76 ->  (* DIA must be > peak (75) for valid IOB curve *)
+  iob_fraction_remaining e2 dia <= iob_fraction_remaining e1 dia.
+Proof.
+  intros e1 e2 dia Hle Hdia.
+  unfold iob_fraction_remaining.
+  set (peak := 75).
+  set (tail := dia - peak).
+  assert (Htail_pos : tail > 0) by (unfold tail, peak; lia).
+  (* Case: dia = 0 *)
+  destruct (dia =? 0) eqn:Edia0.
+  { apply Nat.eqb_eq in Edia0. lia. }
+  (* Case: e2 >= dia *)
+  destruct (dia <=? e2) eqn:Edia_e2.
+  { (* e2 >= dia, so result for e2 is 0 *) lia. }
+  apply Nat.leb_nle in Edia_e2.
+  (* Case: e1 >= dia *)
+  destruct (dia <=? e1) eqn:Edia_e1.
+  { apply Nat.leb_le in Edia_e1. lia. }
+  apply Nat.leb_nle in Edia_e1.
+  (* Both e1 and e2 are < dia *)
+  (* Case: e1 <= peak *)
+  destruct (e1 <=? peak) eqn:Ee1_peak.
+  - apply Nat.leb_le in Ee1_peak.
+    (* Case: e2 <= peak (both in linear region) *)
+    destruct (e2 <=? peak) eqn:Ee2_peak.
+    + apply Nat.leb_le in Ee2_peak.
+      (* Both in linear region: 100 - (e * 25 / peak) *)
+      assert (e1 * 25 / peak <= e2 * 25 / peak).
+      { apply Nat.div_le_mono. unfold peak. lia. nia. }
+      lia.
+    + apply Nat.leb_nle in Ee2_peak.
+      (* e1 in linear phase, e2 in decay phase *)
+      (* At e1: 100 - (e1 * 25 / 75) >= 100 - 25 = 75 *)
+      (* At e2 (decay): 75 * (tail - post_peak)^2 / tail^2 <= 75 *)
+      assert (He1_val : e1 * 25 / peak <= 25).
+      { apply Nat.div_le_upper_bound. unfold peak. lia. nia. }
+      assert (Hlinear_ge_75 : 100 - e1 * 25 / peak >= 75) by lia.
+      set (post_peak := e2 - peak).
+      assert (Hpost_lt : post_peak < tail) by (unfold post_peak, tail, peak; lia).
+      assert (Hdecay_le_75 : 75 * (tail - post_peak) * (tail - post_peak) / (tail * tail) <= 75).
+      { apply Nat.div_le_upper_bound. nia.
+        assert ((tail - post_peak) * (tail - post_peak) <= tail * tail) by nia.
+        nia. }
+      (* decay <= 75 <= linear, so decay <= linear *)
+      apply Nat.le_trans with 75.
+      * exact Hdecay_le_75.
+      * lia.
+  - apply Nat.leb_nle in Ee1_peak.
+    (* e1 > peak, so e2 > peak too *)
+    destruct (e2 <=? peak) eqn:Ee2_peak.
+    + apply Nat.leb_le in Ee2_peak. lia.
+    + apply Nat.leb_nle in Ee2_peak.
+      (* Both in decay phase *)
+      set (post1 := e1 - peak).
+      set (post2 := e2 - peak).
+      assert (Hpost1_lt : post1 < tail) by (unfold post1, tail, peak; lia).
+      assert (Hpost2_lt : post2 < tail) by (unfold post2, tail, peak; lia).
+      assert (Hpost_le : post1 <= post2) by (unfold post1, post2; lia).
+      assert (Hrem_le : tail - post2 <= tail - post1) by lia.
+      assert (Hsq_le : (tail - post2) * (tail - post2) <= (tail - post1) * (tail - post1)) by nia.
+      apply Nat.div_le_mono. nia. nia.
+Qed.
+
+(** Corollary: IOB monotonicity for standard DIA values (180-300 min). *)
+Lemma iob_fraction_monotonic_standard : forall e1 e2 dia,
+  e1 <= e2 ->
+  dia = DIA_3_HOURS \/ dia = DIA_4_HOURS \/ dia = DIA_5_HOURS ->
+  iob_fraction_remaining e2 dia <= iob_fraction_remaining e1 dia.
+Proof.
+  intros e1 e2 dia Hle Hdia.
+  apply iob_fraction_monotonic. exact Hle.
+  destruct Hdia as [H|[H|H]]; rewrite H; unfold DIA_3_HOURS, DIA_4_HOURS, DIA_5_HOURS; lia.
 Qed.
 
 (** IOB is bounded by original dose.
