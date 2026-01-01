@@ -3782,7 +3782,9 @@ Module ValidatedPrecision.
   Definition cap_twentieths (t : Insulin_twentieth) : Insulin_twentieth :=
     if t <=? PREC_BOLUS_MAX_TWENTIETHS then t else PREC_BOLUS_MAX_TWENTIETHS.
 
-  Definition IOB_HIGH_THRESHOLD_TWENTIETHS : nat := 200.
+  (** IOB high threshold now uses GlobalConfig. *)
+  Definition iob_high_threshold (cfg : Config) : nat := cfg_iob_high_threshold_twentieths cfg.
+  Definition IOB_HIGH_THRESHOLD_TWENTIETHS : nat := iob_high_threshold default_config.
   Definition MAX_HISTORY_LEN : nat := 100.
   Definition MAX_DOSE_TWENTIETHS : nat := 500.
 
@@ -4318,8 +4320,11 @@ Qed.
 Module TDDAccumulator.
 
   Definition MINUTES_PER_DAY : nat := 1440.
-  Definition TDD_WARNING_PERCENT : nat := 80.
-  Definition TDD_BLOCK_PERCENT : nat := 100.
+  (** TDD warning/block percentages now use GlobalConfig. *)
+  Definition tdd_warning_percent (cfg : Config) : nat := cfg_tdd_warning_percent cfg.
+  Definition tdd_block_percent (cfg : Config) : nat := cfg_tdd_block_percent cfg.
+  Definition TDD_WARNING_PERCENT : nat := tdd_warning_percent default_config.
+  Definition TDD_BLOCK_PERCENT : nat := tdd_block_percent default_config.
 
   Definition events_in_window (now : Minutes) (window : nat) (events : list BolusEvent) : list BolusEvent :=
     filter (fun e =>
@@ -4888,16 +4893,18 @@ Proof. reflexivity. Qed.
 
 Module SensorUncertainty.
 
-  Definition SENSOR_ERROR_PERCENT : nat := 15.
+  (** Sensor error percentage now uses GlobalConfig. *)
+  Definition sensor_error_percent (cfg : Config) : nat := cfg_sensor_error_percent cfg.
+  Definition SENSOR_ERROR_PERCENT : nat := sensor_error_percent default_config.
 
   Definition bg_with_margin (bg : BG_mg_dL) (margin_percent : nat) : BG_mg_dL :=
     mkBG (mg_dL_val bg - (mg_dL_val bg * margin_percent) / 100).
 
-  Definition conservative_bg (bg : BG_mg_dL) : BG_mg_dL :=
-    bg_with_margin bg SENSOR_ERROR_PERCENT.
+  Definition conservative_bg (cfg : Config) (bg : BG_mg_dL) : BG_mg_dL :=
+    bg_with_margin bg (sensor_error_percent cfg).
 
-  Definition conservative_correction (current_bg target_bg : BG_mg_dL) (isf : nat) : nat :=
-    let cons_bg := conservative_bg current_bg in
+  Definition conservative_correction (cfg : Config) (current_bg target_bg : BG_mg_dL) (isf : nat) : nat :=
+    let cons_bg := conservative_bg cfg current_bg in
     correction_bolus cons_bg target_bg isf.
 
 End SensorUncertainty.
@@ -4906,44 +4913,49 @@ Export SensorUncertainty.
 
 (** Witness: 200 mg/dL with 15% margin = 200 - 30 = 170 mg/dL. *)
 Lemma witness_conservative_bg_200 :
-  conservative_bg (mkBG 200) = mkBG 170.
+  conservative_bg default_config (mkBG 200) = mkBG 170.
 Proof. reflexivity. Qed.
 
 (** Witness: 100 mg/dL with 15% margin = 100 - 15 = 85 mg/dL. *)
 Lemma witness_conservative_bg_100 :
-  conservative_bg (mkBG 100) = mkBG 85.
+  conservative_bg default_config (mkBG 100) = mkBG 85.
 Proof. reflexivity. Qed.
 
 (** Witness: conservative correction at BG 200, target 100, ISF 50.
     Conservative BG = 170. Correction = (170-100)/50 = 1 (vs 2 without margin). *)
 Lemma witness_conservative_correction :
-  conservative_correction (mkBG 200) (mkBG 100) 50 = 1.
+  conservative_correction default_config (mkBG 200) (mkBG 100) 50 = 1.
 Proof. reflexivity. Qed.
 
 (** Witness: at BG 150, conservative BG = 127. Correction = (127-100)/50 = 0. *)
 Lemma witness_conservative_near_target :
-  conservative_correction (mkBG 150) (mkBG 100) 50 = 0.
+  conservative_correction default_config (mkBG 150) (mkBG 100) 50 = 0.
 Proof. reflexivity. Qed.
 
 (** Property: conservative BG is always <= actual BG. *)
-Lemma conservative_bg_le : forall bg,
-  mg_dL_val (conservative_bg bg) <= mg_dL_val bg.
+Lemma conservative_bg_le : forall cfg bg,
+  cfg_sensor_error_percent cfg <= 100 ->
+  mg_dL_val (conservative_bg cfg bg) <= mg_dL_val bg.
 Proof.
-  intro bg. unfold conservative_bg, bg_with_margin, SENSOR_ERROR_PERCENT.
+  intros cfg bg Hcfg. unfold conservative_bg, bg_with_margin, sensor_error_percent.
   simpl.
-  assert ((mg_dL_val bg * 15) / 100 <= mg_dL_val bg) by (apply Nat.div_le_upper_bound; lia).
+  assert (Hdiv: (mg_dL_val bg * cfg_sensor_error_percent cfg) / 100 <= mg_dL_val bg).
+  { destruct (mg_dL_val bg) eqn:Ebg.
+    - simpl. lia.
+    - apply Nat.div_le_upper_bound. lia. nia. }
   lia.
 Qed.
 
 (** Property: conservative correction is <= regular correction. *)
-Lemma conservative_correction_le : forall bg target isf,
+Lemma conservative_correction_le : forall cfg bg target isf,
   isf > 0 ->
-  conservative_correction bg target isf <= correction_bolus bg target isf.
+  cfg_sensor_error_percent cfg <= 100 ->
+  conservative_correction cfg bg target isf <= correction_bolus bg target isf.
 Proof.
-  intros bg target isf Hisf.
+  intros cfg bg target isf Hisf Hcfg.
   unfold conservative_correction.
   apply correction_monotonic_bg. exact Hisf.
-  apply conservative_bg_le.
+  apply conservative_bg_le. exact Hcfg.
 Qed.
 
 (** --- Dawn Phenomenon ISF Adjustment ---                                    *)
