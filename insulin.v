@@ -5542,8 +5542,8 @@ Module LivenessProperty.
     exists t c, validated_precision_bolus liveness_input liveness_params = PrecOK t c /\ t <> 0.
   Proof.
     eexists. eexists. split.
-    - reflexivity.
-    - intro H. discriminate H.
+    - native_compute. reflexivity.
+    - native_compute. lia.
   Qed.
 
   (** Liveness for zero carbs (correction only). *)
