@@ -3111,6 +3111,410 @@ End BilinearIOB.
 
 Export BilinearIOB.
 
+(** ========================================================================= *)
+(** EXTENDED/DUAL-WAVE BOLUS                                                  *)
+(** For high-fat/high-protein meals, insulin can be split into:               *)
+(**   - Immediate portion: delivered instantly (handles fast carbs)           *)
+(**   - Extended portion: delivered over time (handles slow absorption)       *)
+(** This prevents early hypoglycemia and late hyperglycemia.                  *)
+(** ========================================================================= *)
+
+Module ExtendedBolus.
+
+  (** --- Constants --- *)
+  Definition MIN_EXTENDED_DURATION : Minutes := 30.
+  Definition MAX_EXTENDED_DURATION : Minutes := 480.  (* 8 hours *)
+  Definition DELIVERY_INTERVAL : Minutes := 5.        (* Pump delivers every 5 min *)
+  Definition DWB_MAX_DOSE_TWENTIETHS : nat := 500.    (* 25U max, same as precision calc *)
+
+  (** --- Delivery Types --- *)
+  Inductive BolusDeliveryType : Type :=
+    | Delivery_Normal : BolusDeliveryType        (* 100% immediate *)
+    | Delivery_Square : BolusDeliveryType        (* 100% extended *)
+    | Delivery_DualWave : BolusDeliveryType.     (* Split immediate/extended *)
+
+  (** --- Dual-Wave Bolus Record --- *)
+  (** All doses in twentieths (0.05U) for precision. *)
+  Record DualWaveBolus := mkDualWaveBolus {
+    dwb_total_twentieths : Insulin_twentieth;
+    dwb_immediate_percent : nat;  (* 0-100, what % is delivered immediately *)
+    dwb_extended_duration : Minutes  (* Duration for extended portion *)
+  }.
+
+  (** --- Square-Wave Bolus Record --- *)
+  (** Pure extended delivery, no immediate portion. *)
+  Record SquareWaveBolus := mkSquareWaveBolus {
+    swb_total_twentieths : Insulin_twentieth;
+    swb_duration : Minutes
+  }.
+
+  (** --- Validation --- *)
+  Definition dwb_valid (dwb : DualWaveBolus) : bool :=
+    (dwb_immediate_percent dwb <=? 100) &&
+    (MIN_EXTENDED_DURATION <=? dwb_extended_duration dwb) &&
+    (dwb_extended_duration dwb <=? MAX_EXTENDED_DURATION) &&
+    (dwb_total_twentieths dwb <=? DWB_MAX_DOSE_TWENTIETHS).
+
+  Definition swb_valid (swb : SquareWaveBolus) : bool :=
+    (MIN_EXTENDED_DURATION <=? swb_duration swb) &&
+    (swb_duration swb <=? MAX_EXTENDED_DURATION) &&
+    (swb_total_twentieths swb <=? DWB_MAX_DOSE_TWENTIETHS).
+
+  (** --- Portion Calculations --- *)
+  (** Immediate portion: (total * immediate_percent) / 100 *)
+  Definition immediate_portion (dwb : DualWaveBolus) : Insulin_twentieth :=
+    (dwb_total_twentieths dwb * dwb_immediate_percent dwb) / 100.
+
+  (** Extended portion: total - immediate (avoids rounding loss) *)
+  Definition extended_portion (dwb : DualWaveBolus) : Insulin_twentieth :=
+    dwb_total_twentieths dwb - immediate_portion dwb.
+
+  (** --- Delivery Schedule --- *)
+  (** Number of delivery intervals in extended duration *)
+  Definition num_intervals (duration : Minutes) : nat :=
+    duration / DELIVERY_INTERVAL.
+
+  (** Dose per interval (floor division, remainder in final interval) *)
+  Definition dose_per_interval (extended_dose : Insulin_twentieth) (duration : Minutes) : Insulin_twentieth :=
+    let intervals := num_intervals duration in
+    if intervals =? 0 then extended_dose
+    else extended_dose / intervals.
+
+  (** Remainder dose for final interval *)
+  Definition final_interval_extra (extended_dose : Insulin_twentieth) (duration : Minutes) : Insulin_twentieth :=
+    let intervals := num_intervals duration in
+    if intervals =? 0 then 0
+    else extended_dose mod intervals.
+
+  (** --- Delivered Amount at Time T --- *)
+  (** How much of the extended portion has been delivered by time T (minutes after bolus start) *)
+  Definition extended_delivered_at (extended_dose : Insulin_twentieth) (duration : Minutes) (elapsed : Minutes) : Insulin_twentieth :=
+    if duration =? 0 then extended_dose
+    else if duration <=? elapsed then extended_dose
+    else
+      let intervals_elapsed := elapsed / DELIVERY_INTERVAL in
+      let total_intervals := num_intervals duration in
+      if total_intervals =? 0 then extended_dose
+      else
+        let base_per_interval := extended_dose / total_intervals in
+        let remainder := extended_dose mod total_intervals in
+        (* Remainder is distributed to first 'remainder' intervals *)
+        let bonus := if intervals_elapsed <=? remainder then intervals_elapsed else remainder in
+        intervals_elapsed * base_per_interval + bonus.
+
+  (** Total delivered at time T for dual-wave bolus *)
+  Definition dwb_delivered_at (dwb : DualWaveBolus) (elapsed : Minutes) : Insulin_twentieth :=
+    let imm := immediate_portion dwb in
+    let ext := extended_portion dwb in
+    let ext_delivered := extended_delivered_at ext (dwb_extended_duration dwb) elapsed in
+    imm + ext_delivered.
+
+  (** Total delivered at time T for square-wave bolus *)
+  Definition swb_delivered_at (swb : SquareWaveBolus) (elapsed : Minutes) : Insulin_twentieth :=
+    extended_delivered_at (swb_total_twentieths swb) (swb_duration swb) elapsed.
+
+  (** --- IOB Calculations for Extended Boluses --- *)
+  (** For extended boluses, IOB must account for:
+      1. Immediate portion: decays from time 0
+      2. Extended portion: each micro-dose decays from its delivery time *)
+
+  (** Simplified IOB: treat extended as if all delivered at midpoint *)
+  (** This is conservative (overestimates IOB slightly) *)
+  Definition dwb_iob_simplified (dwb : DualWaveBolus) (elapsed : Minutes) (dia : DIA_minutes) : Insulin_twentieth :=
+    let imm := immediate_portion dwb in
+    let ext := extended_portion dwb in
+    let imm_iob := (imm * iob_fraction_remaining elapsed dia) / 100 in
+    let ext_midpoint := dwb_extended_duration dwb / 2 in
+    let ext_elapsed := if elapsed <=? ext_midpoint then 0 else elapsed - ext_midpoint in
+    let ext_iob := (ext * iob_fraction_remaining ext_elapsed dia) / 100 in
+    imm_iob + ext_iob.
+
+End ExtendedBolus.
+
+Export ExtendedBolus.
+
+(** ========================================================================= *)
+(** EXTENDED BOLUS PROPERTIES & PROOFS                                        *)
+(** ========================================================================= *)
+
+(** --- Conservation Property --- *)
+(** The sum of immediate and extended portions equals total dose. *)
+Lemma extended_bolus_conservation : forall dwb,
+  dwb_immediate_percent dwb <= 100 ->
+  immediate_portion dwb + extended_portion dwb = dwb_total_twentieths dwb.
+Proof.
+  intros dwb Hpct.
+  unfold immediate_portion, extended_portion.
+  set (total := dwb_total_twentieths dwb).
+  set (pct := dwb_immediate_percent dwb).
+  set (imm := total * pct / 100).
+  assert (Hdiv : imm <= total).
+  { unfold imm. destruct total eqn:Et.
+    - simpl. lia.
+    - apply Nat.div_le_upper_bound. lia.
+      assert (pct <= 100) by lia.
+      nia. }
+  (* a + (b - a) = b when a <= b *)
+  rewrite Nat.add_sub_assoc by exact Hdiv.
+  rewrite Nat.add_comm.
+  rewrite Nat.add_sub.
+  reflexivity.
+Qed.
+
+(** --- Immediate Portion Bounds --- *)
+Lemma immediate_portion_le_total : forall dwb,
+  dwb_immediate_percent dwb <= 100 ->
+  immediate_portion dwb <= dwb_total_twentieths dwb.
+Proof.
+  intros dwb Hpct.
+  unfold immediate_portion.
+  destruct (dwb_total_twentieths dwb) eqn:Et.
+  - simpl. lia.
+  - apply Nat.div_le_upper_bound. lia. nia.
+Qed.
+
+Lemma extended_portion_le_total : forall dwb,
+  dwb_immediate_percent dwb <= 100 ->
+  extended_portion dwb <= dwb_total_twentieths dwb.
+Proof.
+  intros dwb Hpct.
+  unfold extended_portion.
+  pose proof (immediate_portion_le_total dwb Hpct).
+  lia.
+Qed.
+
+(** --- Monotonicity of Delivery --- *)
+(** Delivered amount is monotonically non-decreasing over time. *)
+Lemma extended_delivered_monotonic : forall dose duration t1 t2,
+  t1 <= t2 ->
+  extended_delivered_at dose duration t1 <= extended_delivered_at dose duration t2.
+Proof.
+  intros dose duration t1 t2 Hle.
+  unfold extended_delivered_at.
+  destruct (duration =? 0) eqn:Ed0.
+  - lia.
+  - apply Nat.eqb_neq in Ed0.
+    destruct (duration <=? t2) eqn:Et2.
+    + apply Nat.leb_le in Et2.
+      destruct (duration <=? t1) eqn:Et1.
+      * lia.
+      * apply Nat.leb_nle in Et1.
+        set (intervals := num_intervals duration).
+        destruct (intervals =? 0) eqn:Ei0.
+        { lia. }
+        { apply Nat.eqb_neq in Ei0.
+          set (base := dose / intervals).
+          set (rem := dose mod intervals).
+          set (i1 := t1 / DELIVERY_INTERVAL).
+          assert (Htotal : i1 * base + (if i1 <=? rem then i1 else rem) <= dose).
+          { destruct (i1 <=? rem) eqn:Eir.
+            - apply Nat.leb_le in Eir.
+              assert (Hi1_le : i1 <= intervals).
+              { unfold i1, intervals, num_intervals.
+                apply Nat.div_le_mono. unfold DELIVERY_INTERVAL. lia. lia. }
+              assert (Hdiv_mod : intervals * base + rem = dose).
+              { unfold base, rem. symmetry. apply Nat.div_mod. lia. }
+              assert (i1 * base + i1 <= intervals * base + rem) by nia.
+              lia.
+            - apply Nat.leb_nle in Eir.
+              assert (Hi1_le : i1 <= intervals).
+              { unfold i1, intervals, num_intervals.
+                apply Nat.div_le_mono. unfold DELIVERY_INTERVAL. lia. lia. }
+              assert (Hdiv_mod : intervals * base + rem = dose).
+              { unfold base, rem. symmetry. apply Nat.div_mod. lia. }
+              assert (i1 * base + rem <= intervals * base + rem) by nia.
+              lia. }
+          lia. }
+    + apply Nat.leb_nle in Et2.
+      destruct (duration <=? t1) eqn:Et1.
+      * apply Nat.leb_le in Et1. lia.
+      * apply Nat.leb_nle in Et1.
+        set (intervals := num_intervals duration).
+        destruct (intervals =? 0) eqn:Ei0.
+        { lia. }
+        { apply Nat.eqb_neq in Ei0.
+          set (base := dose / intervals).
+          set (rem := dose mod intervals).
+          set (i1 := t1 / DELIVERY_INTERVAL).
+          set (i2 := t2 / DELIVERY_INTERVAL).
+          assert (Hi12 : i1 <= i2).
+          { unfold i1, i2. apply Nat.div_le_mono.
+            unfold DELIVERY_INTERVAL. lia. lia. }
+          destruct (i1 <=? rem) eqn:E1; destruct (i2 <=? rem) eqn:E2.
+          - apply Nat.leb_le in E1. apply Nat.leb_le in E2. nia.
+          - apply Nat.leb_le in E1. apply Nat.leb_nle in E2. nia.
+          - apply Nat.leb_nle in E1. apply Nat.leb_le in E2. lia.
+          - apply Nat.leb_nle in E1. apply Nat.leb_nle in E2. nia. }
+Qed.
+
+(** --- Delivery Completion --- *)
+(** At or after duration, full extended dose is delivered. *)
+Lemma extended_delivered_complete : forall dose duration elapsed,
+  elapsed >= duration ->
+  duration > 0 ->
+  extended_delivered_at dose duration elapsed = dose.
+Proof.
+  intros dose duration elapsed Hge Hdur.
+  unfold extended_delivered_at.
+  destruct (duration =? 0) eqn:Ed.
+  - apply Nat.eqb_eq in Ed. lia.
+  - destruct (duration <=? elapsed) eqn:Ele.
+    + reflexivity.
+    + apply Nat.leb_nle in Ele. lia.
+Qed.
+
+(** --- Delivery Bounds --- *)
+(** Delivered amount never exceeds total dose. *)
+Lemma extended_delivered_bounded : forall dose duration elapsed,
+  extended_delivered_at dose duration elapsed <= dose.
+Proof.
+  intros dose duration elapsed.
+  unfold extended_delivered_at.
+  destruct (duration =? 0) eqn:Ed0; [lia|].
+  destruct (duration <=? elapsed) eqn:Ele; [lia|].
+  apply Nat.eqb_neq in Ed0.
+  apply Nat.leb_nle in Ele.
+  set (intervals := num_intervals duration).
+  destruct (intervals =? 0) eqn:Ei0; [lia|].
+  apply Nat.eqb_neq in Ei0.
+  set (base := dose / intervals).
+  set (rem := dose mod intervals).
+  set (i := elapsed / DELIVERY_INTERVAL).
+  assert (Hi : i <= intervals).
+  { unfold i, intervals, num_intervals.
+    apply Nat.div_le_mono. unfold DELIVERY_INTERVAL. lia. lia. }
+  assert (Hdiv_mod : intervals * base + rem = dose).
+  { unfold base, rem. symmetry. apply Nat.div_mod. lia. }
+  destruct (i <=? rem) eqn:Eir.
+  - apply Nat.leb_le in Eir.
+    assert (i * base + i <= intervals * base + rem) by nia.
+    lia.
+  - apply Nat.leb_nle in Eir.
+    assert (i * base + rem <= intervals * base + rem) by nia.
+    lia.
+Qed.
+
+(** --- DWB Delivered Bounds --- *)
+Lemma dwb_delivered_bounded : forall dwb elapsed,
+  dwb_immediate_percent dwb <= 100 ->
+  dwb_delivered_at dwb elapsed <= dwb_total_twentieths dwb.
+Proof.
+  intros dwb elapsed Hpct.
+  unfold dwb_delivered_at.
+  pose proof (extended_bolus_conservation dwb Hpct) as Hcons.
+  pose proof (extended_delivered_bounded (extended_portion dwb) (dwb_extended_duration dwb) elapsed) as Hdel.
+  (* immediate + extended_delivered <= immediate + extended = total *)
+  lia.
+Qed.
+
+(** --- DWB Delivered Monotonic --- *)
+Lemma dwb_delivered_monotonic : forall dwb t1 t2,
+  t1 <= t2 ->
+  dwb_delivered_at dwb t1 <= dwb_delivered_at dwb t2.
+Proof.
+  intros dwb t1 t2 Hle.
+  unfold dwb_delivered_at.
+  pose proof (extended_delivered_monotonic (extended_portion dwb)
+              (dwb_extended_duration dwb) t1 t2 Hle).
+  lia.
+Qed.
+
+(** --- DWB Completion --- *)
+Lemma dwb_delivered_complete : forall dwb,
+  dwb_immediate_percent dwb <= 100 ->
+  dwb_extended_duration dwb > 0 ->
+  dwb_delivered_at dwb (dwb_extended_duration dwb) = dwb_total_twentieths dwb.
+Proof.
+  intros dwb Hpct Hdur.
+  unfold dwb_delivered_at.
+  rewrite extended_delivered_complete; [|lia|lia].
+  apply extended_bolus_conservation. exact Hpct.
+Qed.
+
+(** ========================================================================= *)
+(** EXTENDED BOLUS WITNESSES                                                  *)
+(** ========================================================================= *)
+
+(** Standard dual-wave: 60% immediate, 40% extended over 2 hours *)
+Definition witness_dwb_standard : DualWaveBolus :=
+  mkDualWaveBolus 100 60 120.  (* 5U total, 60% imm, 2 hours *)
+
+Lemma witness_dwb_standard_valid : dwb_valid witness_dwb_standard = true.
+Proof. reflexivity. Qed.
+
+Lemma witness_dwb_standard_immediate : immediate_portion witness_dwb_standard = 60.
+Proof. reflexivity. Qed.
+
+Lemma witness_dwb_standard_extended : extended_portion witness_dwb_standard = 40.
+Proof. reflexivity. Qed.
+
+Lemma witness_dwb_standard_conservation :
+  immediate_portion witness_dwb_standard + extended_portion witness_dwb_standard = 100.
+Proof. reflexivity. Qed.
+
+(** Pizza dual-wave: 30% immediate, 70% extended over 4 hours *)
+Definition witness_dwb_pizza : DualWaveBolus :=
+  mkDualWaveBolus 80 30 240.  (* 4U total, 30% imm, 4 hours *)
+
+Lemma witness_dwb_pizza_valid : dwb_valid witness_dwb_pizza = true.
+Proof. reflexivity. Qed.
+
+Lemma witness_dwb_pizza_immediate : immediate_portion witness_dwb_pizza = 24.
+Proof. reflexivity. Qed.
+
+Lemma witness_dwb_pizza_extended : extended_portion witness_dwb_pizza = 56.
+Proof. reflexivity. Qed.
+
+(** Square-wave: 100% extended over 3 hours *)
+Definition witness_swb_extended : SquareWaveBolus :=
+  mkSquareWaveBolus 60 180.  (* 3U total, 3 hours *)
+
+Lemma witness_swb_extended_valid : swb_valid witness_swb_extended = true.
+Proof. reflexivity. Qed.
+
+(** Delivery schedule witness: after 60 min of 2-hour extended delivery
+    intervals=24, base=1, rem=16, i=12, i<=rem so delivered=12*1+12=24 *)
+Lemma witness_delivery_half :
+  extended_delivered_at 40 120 60 = 24.
+Proof. reflexivity. Qed.
+
+(** Delivery schedule witness: at completion *)
+Lemma witness_delivery_complete :
+  extended_delivered_at 40 120 120 = 40.
+Proof. reflexivity. Qed.
+
+(** Delivery schedule witness: after completion *)
+Lemma witness_delivery_past_complete :
+  extended_delivered_at 40 120 180 = 40.
+Proof. reflexivity. Qed.
+
+(** DWB delivery at start: only immediate portion *)
+Lemma witness_dwb_at_start :
+  dwb_delivered_at witness_dwb_standard 0 = 60.
+Proof. reflexivity. Qed.
+
+(** DWB delivery at end: full dose *)
+Lemma witness_dwb_at_end :
+  dwb_delivered_at witness_dwb_standard 120 = 100.
+Proof. reflexivity. Qed.
+
+(** DWB delivery midway: immediate=60, extended_delivered(40,120,60)=24, total=84 *)
+Lemma witness_dwb_at_midway :
+  dwb_delivered_at witness_dwb_standard 60 = 84.
+Proof. reflexivity. Qed.
+
+(** IOB simplified witness: immediately after dual-wave (no decay yet) *)
+Lemma witness_iob_at_start :
+  dwb_iob_simplified witness_dwb_standard 0 DIA_4_HOURS = 100.
+Proof. reflexivity. Qed.
+
+(** IOB simplified witness: at DIA from bolus start, immediate IOB=0,
+    but extended portion (starting at midpoint) still has residual IOB.
+    ext_elapsed = 240 - 60 = 180, iob_fraction(180,240) = 9%, so ext_iob = 40*9/100 = 3 *)
+Lemma witness_iob_at_dia :
+  dwb_iob_simplified witness_dwb_standard DIA_4_HOURS DIA_4_HOURS = 3.
+Proof. reflexivity. Qed.
+
 Inductive ActivityState : Type :=
   | Activity_Normal : ActivityState
   | Activity_LightExercise : ActivityState
