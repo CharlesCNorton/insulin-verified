@@ -77,17 +77,14 @@
 (** [TODO 3] ACTIVITY MODIFIER DECAY:                                         *)
 (**   Model exercise effect decay over 12-24 hours rather than static mult.   *)
 (**                                                                           *)
-(** [TODO 4] SENSOR LAG COMPENSATION:                                         *)
-(**   CGM readings are ~10-15 min delayed. Model this lag explicitly.         *)
-(**                                                                           *)
-(** [TODO 5] MEAL TIMING MODEL:                                               *)
+(** [TODO 4] MEAL TIMING MODEL:                                               *)
 (**   Support pre-bolus and late-bolus compensation. Current model assumes    *)
 (**   bolus at meal start.                                                    *)
 (**                                                                           *)
-(** [TODO 6] PUMP COMMUNICATION MODEL:                                        *)
+(** [TODO 5] PUMP COMMUNICATION MODEL:                                        *)
 (**   Model Bluetooth/RF latency and partial delivery scenarios.              *)
 (**                                                                           *)
-(** [TODO 7] OCAML REFINEMENT PROOFS:                                         *)
+(** [TODO 6] OCAML REFINEMENT PROOFS:                                         *)
 (**   Bridge gap between Coq spec and extracted OCaml with refinement proofs. *)
 (** ========================================================================= *)
 
@@ -156,7 +153,10 @@ Module GlobalConfig.
     cfg_tdd_warning_percent : nat;
 
     (** TDD block percentage. Default: 100 *)
-    cfg_tdd_block_percent : nat
+    cfg_tdd_block_percent : nat;
+
+    (** CGM sensor lag in minutes. Interstitial glucose lags blood glucose. Default: 12 *)
+    cfg_sensor_lag_minutes : nat
   }.
 
   (** Default configuration with standard clinical values. *)
@@ -169,7 +169,8 @@ Module GlobalConfig.
     60     (* stacking_warning_threshold_min *)
     200    (* iob_high_threshold_twentieths *)
     80     (* tdd_warning_percent *)
-    100    (* tdd_block_percent *).
+    100    (* tdd_block_percent *)
+    12     (* sensor_lag_minutes *).
 
   (** Validation: config parameters are within reasonable bounds. *)
   Definition config_valid (c : Config) : bool :=
@@ -181,7 +182,8 @@ Module GlobalConfig.
     (15 <=? cfg_stacking_warning_threshold_min c) && (cfg_stacking_warning_threshold_min c <=? 120) &&
     (40 <=? cfg_iob_high_threshold_twentieths c) && (cfg_iob_high_threshold_twentieths c <=? 400) &&
     (50 <=? cfg_tdd_warning_percent c) && (cfg_tdd_warning_percent c <=? 100) &&
-    (cfg_tdd_warning_percent c <=? cfg_tdd_block_percent c) && (cfg_tdd_block_percent c <=? 150).
+    (cfg_tdd_warning_percent c <=? cfg_tdd_block_percent c) && (cfg_tdd_block_percent c <=? 150) &&
+    (5 <=? cfg_sensor_lag_minutes c) && (cfg_sensor_lag_minutes c <=? 20).
 
 End GlobalConfig.
 
@@ -949,6 +951,140 @@ Module CGMTrend.
 End CGMTrend.
 
 Export CGMTrend.
+
+(** ========================================================================= *)
+(** SENSOR LAG COMPENSATION                                                    *)
+(** CGM sensors measure interstitial glucose, which lags blood glucose by      *)
+(** approximately 10-15 minutes. This module provides lag-aware predictions.   *)
+(** ========================================================================= *)
+
+Module SensorLag.
+
+  (** The sensor lag from configuration. *)
+  Definition sensor_lag (cfg : Config) : nat := cfg_sensor_lag_minutes cfg.
+
+  (** Estimate current blood glucose from CGM reading by extrapolating trend.
+      If CGM shows 150 and rising at 2 mg/dL/min, actual BG is ~150 + 2*lag. *)
+  Definition estimated_current_bg (cfg : Config) (cgm_reading : nat) (trend : TrendArrow) : nat :=
+    let rate := trend_rate_mg_per_min trend in
+    let lag := Z.of_nat (sensor_lag cfg) in
+    let delta := (rate * lag)%Z in
+    if (delta <? 0)%Z then
+      let neg_delta := Z.to_nat (Z.opp delta) in
+      if cgm_reading <=? neg_delta then 0
+      else cgm_reading - neg_delta
+    else
+      cgm_reading + Z.to_nat delta.
+
+  (** Lag-adjusted trend prediction. Accounts for both:
+      1. The sensor lag (CGM reading is from lag minutes ago)
+      2. The prediction horizon (where will BG be in horizon minutes)
+      Total lookahead = sensor_lag + prediction_horizon *)
+  Definition lag_adjusted_predicted_bg (cfg : Config) (cgm_reading : nat) (trend : TrendArrow) : nat :=
+    let rate := trend_rate_mg_per_min trend in
+    let total_horizon := Z.of_nat (sensor_lag cfg + prediction_horizon_min cfg) in
+    let delta := (rate * total_horizon)%Z in
+    if (delta <? 0)%Z then
+      let neg_delta := Z.to_nat (Z.opp delta) in
+      if cgm_reading <=? neg_delta then 0
+      else cgm_reading - neg_delta
+    else
+      cgm_reading + Z.to_nat delta.
+
+  (** Conservative prediction for safety decisions. Uses the worse of:
+      - Standard prediction (ignoring lag)
+      - Lag-adjusted prediction
+      For rising BG, lag-adjusted is higher (worse). For falling, lower (worse). *)
+  Definition conservative_predicted_bg (cfg : Config) (cgm_reading : nat) (trend : TrendArrow) : nat :=
+    let standard := predicted_bg_from_trend cfg cgm_reading trend in
+    let lag_adj := lag_adjusted_predicted_bg cfg cgm_reading trend in
+    match trend with
+    | Trend_RisingRapidly | Trend_Rising | Trend_RisingSlowly =>
+        Nat.max standard lag_adj
+    | Trend_Stable => standard
+    | Trend_FallingSlowly | Trend_Falling | Trend_FallingRapidly =>
+        Nat.min standard lag_adj
+    end.
+
+End SensorLag.
+
+Export SensorLag.
+
+(** --- Sensor Lag Properties --- *)
+
+(** Estimated current BG equals CGM reading when trend is stable. *)
+Lemma estimated_bg_stable : forall cfg cgm,
+  estimated_current_bg cfg cgm Trend_Stable = cgm.
+Proof.
+  intros cfg cgm. unfold estimated_current_bg, trend_rate_mg_per_min.
+  simpl. lia.
+Qed.
+
+(** Estimated current BG is higher than CGM when rising (default config). *)
+Lemma estimated_bg_rising_ge :
+  forall cgm, estimated_current_bg default_config cgm Trend_Rising >= cgm.
+Proof.
+  intro cgm. unfold estimated_current_bg, trend_rate_mg_per_min, sensor_lag, default_config.
+  simpl. lia.
+Qed.
+
+(** Lag-adjusted prediction accounts for full lookahead (default config). *)
+Lemma lag_adjusted_total_horizon : forall cgm,
+  lag_adjusted_predicted_bg default_config cgm Trend_Rising >
+  predicted_bg_from_trend default_config cgm Trend_Rising.
+Proof.
+  intro cgm.
+  unfold lag_adjusted_predicted_bg, predicted_bg_from_trend.
+  unfold prediction_horizon_min, sensor_lag, trend_rate_mg_per_min, default_config.
+  simpl. lia.
+Qed.
+
+(** Conservative prediction for rising trends is at least as high as standard. *)
+Lemma conservative_rising_ge_standard : forall cfg cgm trend,
+  trend = Trend_RisingRapidly \/ trend = Trend_Rising \/ trend = Trend_RisingSlowly ->
+  conservative_predicted_bg cfg cgm trend >= predicted_bg_from_trend cfg cgm trend.
+Proof.
+  intros cfg cgm trend Htrend.
+  unfold conservative_predicted_bg.
+  destruct Htrend as [H|[H|H]]; rewrite H; apply Nat.le_max_l.
+Qed.
+
+(** Conservative prediction for falling trends is at most as low as standard. *)
+Lemma conservative_falling_le_standard : forall cfg cgm trend,
+  trend = Trend_FallingSlowly \/ trend = Trend_Falling \/ trend = Trend_FallingRapidly ->
+  conservative_predicted_bg cfg cgm trend <= predicted_bg_from_trend cfg cgm trend.
+Proof.
+  intros cfg cgm trend Htrend.
+  unfold conservative_predicted_bg.
+  destruct Htrend as [H|[H|H]]; rewrite H; apply Nat.le_min_l.
+Qed.
+
+(** Witness: rising at 150 with 12 min lag, current BG estimated at 150 + 2*12 = 174 *)
+Lemma witness_estimated_rising :
+  estimated_current_bg default_config 150 Trend_Rising = 174.
+Proof. reflexivity. Qed.
+
+(** Witness: falling at 150 with 12 min lag, current BG estimated at 150 - 2*12 = 126 *)
+Lemma witness_estimated_falling :
+  estimated_current_bg default_config 150 Trend_Falling = 126.
+Proof. reflexivity. Qed.
+
+(** Witness: lag-adjusted prediction with 12+20=32 min lookahead.
+    Rising at 2 mg/dL/min: 150 + 2*32 = 214 *)
+Lemma witness_lag_adjusted_rising :
+  lag_adjusted_predicted_bg default_config 150 Trend_Rising = 214.
+Proof. reflexivity. Qed.
+
+(** Witness: conservative prediction takes the higher value for rising *)
+Lemma witness_conservative_rising :
+  conservative_predicted_bg default_config 150 Trend_Rising = 214.
+Proof. reflexivity. Qed.
+
+(** Witness: conservative prediction takes the lower value for falling
+    Standard: 150 - 2*20 = 110. Lag-adjusted: 150 - 2*32 = 86. Min = 86. *)
+Lemma witness_conservative_falling :
+  conservative_predicted_bg default_config 150 Trend_Falling = 86.
+Proof. reflexivity. Qed.
 
 (** Witness: rising rapidly at BG 150 predicts 150 + 3*20 = 210 in 20 min. *)
 Lemma witness_rising_rapidly_prediction :
